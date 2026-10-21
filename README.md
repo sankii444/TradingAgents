@@ -226,6 +226,132 @@ TradingAgents works with any market Yahoo Finance covers, using the exchange-suf
 - Crypto: `BTC-USD`, `ETH-USD`
 - Spot forex: `EURUSD`, `GBPUSD`, `AUDUSD`, `NZDUSD` (Yahoo symbols end in `=X`)
 
+### Forex paper trading
+
+The paper bot supports several independently tracked strategies. Start the
+daily runner before its configured local run time and leave the process running:
+
+```bash
+tradingagents paper-run EURUSD,GBPUSD --strategies agents,trend,mean-reversion,breakout --run-at 23:30
+```
+
+The available signals are the existing TradingAgents analyst ensemble,
+20/50-day EMA trend, 14-day RSI mean reversion, and a 20-day breakout. The
+deterministic strategies need no LLM credentials; the `agents` strategy uses
+the configured TradingAgents provider. You can run one cycle manually with
+`tradingagents paper-trade EURUSD --strategy trend`. The runner executes each
+selected strategy once per day at the configured local time; use Ctrl+C to
+stop it. It needs an always-on computer and an internet connection.
+
+The paper trader supports only EURUSD, GBPUSD, AUDUSD, and NZDUSD. Each strategy
+gets an independent simulated account and SQLite history:
+`forex.sqlite3` for `agents`, and `forex-<strategy>.sqlite3` for each technical
+strategy. The default directory is
+`results_dir/paper` (by default, `%USERPROFILE%\.tradingagents\logs\paper`).
+`--capital` sets the balance only when an account is first created. Compare
+results at any time with:
+
+```bash
+tradingagents paper-report
+```
+
+New positions are sized to a maximum 1% account risk using a two-ATR stop, and
+total simulated exposure is capped at 1x account equity. A repeated signal for
+the same pair and daily bar cannot create a duplicate cycle. This is simulation
+only: it never connects to a broker or sends live orders. Data comes from Yahoo
+daily bars and the simulation does not model spreads, fees, slippage, or all gap
+risk. Paper results are not a reliable forecast of future performance and
+TradingAgents outputs are research signals, not financial advice.
+
+### MetaTrader 5 demo trading
+
+For analysis and demo execution, use this project's TradingAgents market,
+sentiment, and news analysts, or the independent TradingView indicator
+analysis described below. This avoids handing an account to an unreviewed
+downloaded trading bot. Orders, quotes, sizing, and technical-strategy bars
+come from the connected MT5 terminal; TradingAgents and TradingView analysis
+may use their own upstream market data.
+
+Install the optional Windows integration, open MetaTrader 5, sign in to a demo
+account in the terminal, and verify the connection without sending orders:
+
+```powershell
+pip install -e ".[mt5,tradingview]"
+tradingagents mt5-demo-cycle XAUUSD --strategy trend
+```
+
+The terminal must already be logged in to a demo account; no password is
+required by the bot. Use the exact broker symbol from Market Watch (`XAUUSD`,
+`GOLD`, `EURUSD.a`, etc.). Technical strategies use closed bars from that MT5
+terminal. The `agents` strategy uses the configured TradingAgents provider.
+MT5 candle and quote timestamps are normalized to UTC using the offset from a
+recent quote; missing or stale quotes are rejected rather than treated as
+current data.
+The `tradingview` strategy uses the
+[tradingview-mcp](https://github.com/atilaahmettaner/tradingview-mcp) project's
+`tradingview-ta` indicator analyzer; it queries OANDA CFDs for gold and `FX_IDC`
+for currency pairs by default, mapping common broker names such as `GOLD`,
+`XAUUSD.a`, or `EURUSDm` to `XAUUSD`/`EURUSD`. For other broker-specific names
+in the daily runner, provide aligned symbols with `--analysis-symbols XAUUSD,EURUSD`; on a one-shot
+cycle use `--analysis-symbol XAUUSD`. Use `--analysis-exchange` to override the
+TradingView listing when needed.
+
+The first command is signal-only. To explicitly authorize a demo order after
+reviewing its signal, volume, and stop:
+
+```powershell
+tradingagents mt5-demo-cycle XAUUSD --strategy tradingview --execute-demo
+```
+
+For daily automation, keep the process running:
+
+```powershell
+tradingagents mt5-demo-run GOLD.a,EURUSD.a --strategies tradingview --analysis-symbols XAUUSD,EURUSD --run-at 09:00 --execute-demo
+```
+
+Review the locally recorded analysis signals and order statuses with:
+
+```powershell
+tradingagents mt5-demo-report
+```
+
+Live accounts are rejected in code, order sending requires `--execute-demo`,
+and each order has a broker-side 2-ATR stop and a 2R take-profit, a maximum 1%
+equity risk per order, a hard 0.1-lot cap, a once-per-day entry limit per
+symbol, and a persistent duplicate bar guard. No new entry is sent while any
+position or pending order is open on the demo account. The
+database defaults to `results_dir/paper/mt5-demo.sqlite3`; inspect MT5 demo
+history and this local log during testing. This is experimental software:
+verify broker symbols, contract sizes, terminal permissions, spreads, and
+every signal.
+TradingView technical ratings are indicative snapshots, not a validated
+profitability claim; public data availability and symbol coverage can change.
+
+#### Local dashboard
+
+Start the browser dashboard from the same Windows environment where MT5 is
+running:
+
+```powershell
+tradingagents dashboard
+```
+
+It binds only to `127.0.0.1` (default port `8765`) and shows terminal status,
+recent test cycles, and a signal preview. The separate **Confirm demo order**
+button is required to send an order; analysis alone never submits one. To use a
+different local port, pass `--port 8766`; use `--no-open-browser` to print the
+URL without opening it. Close the server with Ctrl+C. The dashboard does not
+log in to a broker or change the account selected in MT5: it uses the demo
+account the terminal is signed in to, shows its server name, and suggests the
+symbols from Market Watch (some brokers list gold as `GOLD` rather than
+`XAUUSD`). Orders also need the terminal's **Algo Trading** button switched on;
+the dashboard shows when it is off. To allow orders only on one broker's demo
+server, pin it:
+
+```powershell
+tradingagents dashboard --require-server "Gold City"
+```
+
 <p align="center">
   <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">
 </p>

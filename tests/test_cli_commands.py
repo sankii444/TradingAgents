@@ -64,6 +64,11 @@ def test_help_lists_the_backtest_command(runner):
     assert "backtest" in runner.invoke(m.app, ["--help"]).output
 
 
+@pytest.mark.unit
+def test_help_lists_the_forex_paper_trading_command(runner):
+    assert "paper-trade" in runner.invoke(m.app, ["--help"]).output
+
+
 class _Result:
     def __init__(self, tmp_path):
         self.run_id = "20260916_000000"

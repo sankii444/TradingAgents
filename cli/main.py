@@ -1,4 +1,7 @@
 import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
 
 import typer
 
@@ -8,6 +11,15 @@ from cli.prompts import filter_analysts_for_asset_type, parse_analysts
 from cli.run import run_analysis
 from tradingagents.backtest import iter_grid, run_backtest, summarize
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.forex_paper import (
+    ForexPaperAccount,
+    get_market_bars,
+    get_market_snapshot,
+    snapshot_from_frame,
+    validate_forex_pair,
+)
+from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.paper_strategies import parse_paper_strategies, signal_for_strategy
 from tradingagents.portfolio import load_portfolio
 
 # prompt_toolkit's win32 output module is importable only on Windows (it asserts
@@ -49,7 +61,9 @@ def analyze(
         help="JSON file with current holdings and cash, so the trader, risk and "
         "portfolio agents size against your actual position.",
     ),
-    ticker: str = typer.Option(None, "--ticker", help="Ticker to analyze, e.g. NVDA or 0700.HK; skips the prompt"),
+    ticker: str = typer.Option(
+        None, "--ticker", help="Ticker to analyze, e.g. NVDA or 0700.HK; skips the prompt"
+    ),
     date: str = typer.Option(None, "--date", help="Analysis date, YYYY-MM-DD; skips the prompt"),
     analysts: str = typer.Option(
         None, "--analysts", help="Comma-separated analysts, e.g. market,news; skips the prompt"
@@ -61,7 +75,8 @@ def analyze(
         None, "--show/--no-show", help="Show the full report at the end without asking"
     ),
     html: bool | None = typer.Option(
-        None, "--html/--no-html",
+        None,
+        "--html/--no-html",
         help="Save the report as one HTML page too, complete_report.html, without asking (default: yes)",
     ),
 ):
@@ -74,6 +89,7 @@ def analyze(
         return
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
+
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
     portfolio_context = None
@@ -85,7 +101,14 @@ def analyze(
             raise typer.Exit(code=1) from None
 
     try:
-        flags = {"ticker": ticker, "date": date, "analysts": analysts, "save": save, "show": show, "html": html}
+        flags = {
+            "ticker": ticker,
+            "date": date,
+            "analysts": analysts,
+            "save": save,
+            "show": show,
+            "html": html,
+        }
         run_analysis(checkpoint=checkpoint, portfolio=portfolio_context, flags=flags)
     except _NO_CONSOLE_ERRORS:
         # A terminal with no console buffer cannot host the interactive prompts.
@@ -107,7 +130,9 @@ def backtest(
     end: str = typer.Option(..., "--end", help="Last analysis date, YYYY-MM-DD"),
     every: int = typer.Option(7, "--every", help="Days between analysis dates"),
     analysts: str = typer.Option(
-        None, "--analysts", help="Comma-separated analysts to run: market, sentiment, news, fundamentals; omit for all the asset type allows"
+        None,
+        "--analysts",
+        help="Comma-separated analysts to run: market, sentiment, news, fundamentals; omit for all the asset type allows",
     ),
     asset_type: str = typer.Option("stock", "--asset-type", help="stock, crypto, or forex"),
     portfolio: str = typer.Option(
@@ -125,8 +150,11 @@ def backtest(
         kind = AssetType(asset_type.strip().lower())
         # The analysts are named and checked as for an analysis; without a
         # choice, every analyst the asset type allows runs.
-        chosen = (parse_analysts(analysts, kind) if analysts
-                  else filter_analysts_for_asset_type(list(AnalystType), kind))
+        chosen = (
+            parse_analysts(analysts, kind)
+            if analysts
+            else filter_analysts_for_asset_type(list(AnalystType), kind)
+        )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from None
@@ -139,8 +167,13 @@ def backtest(
     def show_progress(done, total, ticker, date):
         console.print(f"[dim][{done}/{total}] {ticker} {date}[/dim]")
 
-    kwargs = {"asset_type": kind.value, "portfolio": book, "run_id": run_id, "progress": show_progress,
-              "selected_analysts": [a.value for a in chosen]}
+    kwargs = {
+        "asset_type": kind.value,
+        "portfolio": book,
+        "run_id": run_id,
+        "progress": show_progress,
+        "selected_analysts": [a.value for a in chosen],
+    }
 
     try:
         result = run_backtest(names, dates, DEFAULT_CONFIG, **kwargs)
@@ -148,12 +181,597 @@ def backtest(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from None
     console.print(summarize(result).render())
-    console.print(f"\nRan {result.cells_run} cells, skipped {result.skipped}. Log: {result.log_path}")
+    console.print(
+        f"\nRan {result.cells_run} cells, skipped {result.skipped}. Log: {result.log_path}"
+    )
     console.print(f"Continue or settle this sweep: --run-id {result.run_id}")
     for ticker, date, reason in result.failures:
         console.print(f"[yellow]failed:[/yellow] {ticker} {date}: {reason}")
     for ticker, reason in result.settlement_failures:
         console.print(f"[yellow]unsettled:[/yellow] {ticker}: {reason}")
+
+
+@app.command("paper-trade")
+def paper_trade(
+    ticker: str = typer.Argument(
+        "EURUSD", help="USD-quoted FX pair: EURUSD, GBPUSD, AUDUSD, or NZDUSD"
+    ),
+    capital: float = typer.Option(
+        10_000.0,
+        "--capital",
+        min=1.0,
+        help="Initial simulated account balance; used only when creating the account",
+    ),
+    risk_percent: float = typer.Option(
+        0.5,
+        "--risk-percent",
+        min=0.1,
+        max=1.0,
+        help="Maximum account risk per new position (0.1-1.0%)",
+    ),
+    strategy: str = typer.Option(
+        "agents",
+        "--strategy",
+        help="Signal strategy: agents, trend, mean-reversion, breakout, or tradingview",
+    ),
+    state: str = typer.Option(
+        None,
+        "--state",
+        help="SQLite paper-account path (strategy variants use separate databases)",
+    ),
+):
+    """Run one FX paper-trading cycle; never contacts a broker."""
+    try:
+        pair = validate_forex_pair(ticker)
+        strategies = parse_paper_strategies(strategy)
+        if len(strategies) != 1:
+            raise ValueError("paper-trade accepts exactly one strategy.")
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    _run_paper_cycle(
+        pair,
+        strategies[0],
+        capital,
+        risk_percent,
+        Path(state or Path(DEFAULT_CONFIG["results_dir"]) / "paper" / "forex.sqlite3"),
+    )
+
+
+def _strategy_state_path(base_path: Path, strategy: str) -> Path:
+    if strategy == "agents":
+        return base_path
+    return base_path.with_name(f"{base_path.stem}-{strategy}{base_path.suffix}")
+
+
+def _run_paper_cycle(
+    pair: str,
+    strategy: str,
+    capital: float,
+    risk_percent: float,
+    base_path: Path,
+) -> None:
+    state_path = _strategy_state_path(base_path, strategy)
+    account = ForexPaperAccount(state_path, initial_capital=capital)
+    bars = None
+    if strategy == "agents":
+        snapshot = get_market_snapshot(pair, DEFAULT_CONFIG)
+    else:
+        bars = get_market_bars(pair, DEFAULT_CONFIG)
+        snapshot = snapshot_from_frame(pair, bars)
+
+    if account.has_cycle(pair, snapshot.date):
+        console.print(
+            f"[yellow]Paper cycle already recorded for {pair} ({strategy}) on {snapshot.date}; "
+            "no duplicate analysis or trade was made.[/yellow]"
+        )
+        return
+
+    final_state = {}
+    if bars is None:
+        graph = TradingAgentsGraph(["market", "social", "news"], config=DEFAULT_CONFIG.copy())
+        final_state, rating = graph.propagate(
+            pair, snapshot.date, asset_type="forex", portfolio=account.portfolio_context()
+        )
+    else:
+        rating = signal_for_strategy(strategy, bars)
+    result = account.apply_signal(snapshot, rating, risk_percent=risk_percent)
+
+    console.print(f"[bold]Forex paper trading — {pair} ({strategy})[/bold]")
+    console.print(f"Analysis date: {snapshot.date} · indicative close: {snapshot.close:.5f}")
+    console.print(f"Strategy signal: {rating}")
+    console.print(f"Paper action: {result.action}")
+    if result.units:
+        console.print(f"Base-currency units: {result.units:,.0f} · stop: {result.stop_price:.5f}")
+    console.print(f"Simulated account balance: ${result.balance:,.2f}")
+    console.print(f"Marked equity: ${result.equity:,.2f}")
+    if final_state.get("final_trade_decision"):
+        console.print(f"\n{final_state['final_trade_decision']}")
+    console.print(f"\nPaper-account database: {state_path}")
+    console.print(
+        "[dim]Simulation only. Daily Yahoo bars, spreads, fees, slippage, and gap risk limit realism.[/dim]"
+    )
+
+
+@app.command("paper-run")
+def paper_run(
+    tickers: str = typer.Argument(
+        "EURUSD",
+        help="Comma-separated USD-quoted FX pairs: EURUSD, GBPUSD, AUDUSD, or NZDUSD",
+    ),
+    strategies: str = typer.Option(
+        "agents,trend,mean-reversion,breakout",
+        "--strategies",
+        help="Comma-separated strategies: agents, trend, mean-reversion, breakout, tradingview",
+    ),
+    run_at: str = typer.Option(
+        "23:30",
+        "--run-at",
+        help="Daily local time in HH:MM; start the service before this time",
+    ),
+    capital: float = typer.Option(
+        10_000.0,
+        "--capital",
+        min=1.0,
+        help="Starting simulated balance for each strategy account",
+    ),
+    risk_percent: float = typer.Option(
+        0.5,
+        "--risk-percent",
+        min=0.1,
+        max=1.0,
+        help="Maximum account risk per new position (0.1-1.0%)",
+    ),
+    state_dir: str = typer.Option(
+        None,
+        "--state-dir",
+        help="Directory for separate SQLite paper accounts (default: results_dir/paper)",
+    ),
+):
+    """Run selected paper strategies once daily at the configured local time."""
+    try:
+        pairs = list(dict.fromkeys(validate_forex_pair(ticker) for ticker in tickers.split(",")))
+        selected_strategies = parse_paper_strategies(strategies)
+        scheduled_time = datetime.strptime(run_at, "%H:%M").time()
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+    if not pairs:
+        console.print("[red]Pass at least one forex pair.[/red]")
+        raise typer.Exit(code=1)
+
+    account_dir = Path(state_dir or Path(DEFAULT_CONFIG["results_dir"]) / "paper")
+    base_path = account_dir / "forex.sqlite3"
+    console.print(
+        f"[bold]Paper bot started[/bold] — {', '.join(pairs)} · "
+        f"{', '.join(selected_strategies)} · daily at {run_at} local time"
+    )
+    console.print(
+        "[dim]Simulation only; no broker or live orders are used. Stop with Ctrl+C.[/dim]"
+    )
+
+    try:
+        while True:
+            now = datetime.now()
+            next_run = now.replace(
+                hour=scheduled_time.hour,
+                minute=scheduled_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            if next_run <= now:
+                next_run += timedelta(days=1)
+            console.print(f"Next paper cycle: {next_run:%Y-%m-%d %H:%M}")
+            time.sleep(max(0, (next_run - now).total_seconds()))
+            for pair in pairs:
+                for selected_strategy in selected_strategies:
+                    try:
+                        _run_paper_cycle(
+                            pair,
+                            selected_strategy,
+                            capital,
+                            risk_percent,
+                            base_path,
+                        )
+                    except Exception as exc:
+                        console.print(
+                            f"[red]Paper cycle failed for {pair} ({selected_strategy}): {exc}[/red]"
+                        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Paper bot stopped.[/yellow]")
+
+
+@app.command("paper-report")
+def paper_report(
+    strategies: str = typer.Option(
+        "agents,trend,mean-reversion,breakout",
+        "--strategies",
+        help="Comma-separated strategies to compare",
+    ),
+    state_dir: str = typer.Option(
+        None,
+        "--state-dir",
+        help="Directory containing paper accounts (default: results_dir/paper)",
+    ),
+):
+    """Compare recorded results for independent paper-strategy accounts."""
+    try:
+        selected_strategies = parse_paper_strategies(strategies)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    account_dir = Path(state_dir or Path(DEFAULT_CONFIG["results_dir"]) / "paper")
+    base_path = account_dir / "forex.sqlite3"
+    console.print("[bold]Forex paper-strategy results[/bold]")
+    for selected_strategy in selected_strategies:
+        state_path = _strategy_state_path(base_path, selected_strategy)
+        if not state_path.is_file():
+            console.print(f"{selected_strategy}: no account data yet")
+            continue
+        summary = ForexPaperAccount(state_path).summary()
+        return_percent = (summary.equity / summary.initial_capital - 1) * 100
+        win_rate = (
+            f"{summary.winning_trades / summary.completed_trades:.1%}"
+            if summary.completed_trades
+            else "n/a"
+        )
+        console.print(
+            f"{selected_strategy}: equity ${summary.equity:,.2f} "
+            f"({return_percent:+.2f}%), realized P/L ${summary.realized_pnl:+,.2f}, "
+            f"closed trades {summary.completed_trades}, win rate {win_rate}, "
+            f"cycles {summary.cycles}"
+        )
+
+
+def _mt5_signal(
+    market,
+    strategy: str,
+    analysis_symbol: str | None,
+    *,
+    analysis_exchange: str | None = None,
+):
+    if strategy == "tradingview":
+        from tradingagents.tradingview_analysis import get_tradingview_signal
+
+        signal, recommendation = get_tradingview_signal(
+            analysis_symbol or market.symbol,
+            timeframe=market.timeframe,
+            exchange=analysis_exchange,
+        )
+        return signal, {"tradingview_recommendation": recommendation}
+    if strategy != "agents":
+        return signal_for_strategy(strategy, market.bars), {}
+
+    ticker = analysis_symbol or market.symbol
+    is_gold = ticker.upper().startswith(("XAU", "GOLD"))
+    asset_type = "commodity" if is_gold else "forex"
+    from tradingagents.portfolio import PortfolioContext
+
+    portfolio = PortfolioContext(
+        cash=market.equity,
+        currency=market.currency,
+        positions=[],
+    )
+    graph = TradingAgentsGraph(["market", "social", "news"], config=DEFAULT_CONFIG.copy())
+    state, signal = graph.propagate(
+        ticker,
+        market.snapshot.date,
+        asset_type=asset_type,
+        portfolio=portfolio,
+    )
+    return signal, state
+
+
+def _run_mt5_demo_cycle(
+    symbol: str,
+    strategy: str,
+    timeframe: str,
+    risk_percent: float,
+    max_lot: float,
+    execute_demo: bool,
+    state_path: Path,
+    analysis_symbol: str | None = None,
+    analysis_exchange: str | None = None,
+    terminal_path: str | None = None,
+):
+    from tradingagents.mt5_demo import MT5DemoSession
+
+    with MT5DemoSession(terminal_path=terminal_path) as session:
+        market = session.market_data(symbol, timeframe)
+        signal, state = _mt5_signal(
+            market,
+            strategy,
+            analysis_symbol,
+            analysis_exchange=analysis_exchange,
+        )
+        result = session.evaluate_signal(
+            market,
+            signal,
+            strategy=strategy,
+            risk_percent=risk_percent,
+            max_lot=max_lot,
+            execute=execute_demo,
+            state_path=state_path,
+        )
+
+    console.print(f"[bold]MT5 demo — {symbol} ({strategy}, {timeframe})[/bold]")
+    console.print(
+        f"Closed bar: {market.snapshot.date} · close: "
+        f"{market.snapshot.close:.{5 if market.snapshot.close < 10 else 2}f}"
+    )
+    console.print(f"Analysis signal: {signal}")
+    console.print(f"Account equity: {market.equity:,.2f} {market.currency}")
+    console.print(f"Action: {result.action}")
+    if result.volume:
+        console.print(
+            f"Volume: {result.volume:g} lots · stop: {result.stop_price} · "
+            f"target: {result.take_profit} · "
+            f"estimated stop risk: {result.risk_amount:,.2f} {market.currency}"
+        )
+    if result.ticket is not None:
+        console.print(f"Demo order ticket: {result.ticket}")
+    if state.get("final_trade_decision"):
+        console.print(f"\n{state['final_trade_decision']}")
+    if state.get("tradingview_recommendation"):
+        console.print(f"TradingView indicator rating: {state['tradingview_recommendation']}")
+    console.print("[dim]Orders are restricted to a verified MT5 demo account.[/dim]")
+
+
+@app.command("mt5-demo-cycle")
+def mt5_demo_cycle(
+    symbol: str = typer.Argument(
+        ..., help="Exact symbol in MT5 Market Watch, e.g. XAUUSD or EURUSD.a"
+    ),
+    strategy: str = typer.Option(
+        "agents",
+        "--strategy",
+        help="Signal strategy: agents, trend, mean-reversion, breakout, or tradingview",
+    ),
+    timeframe: str = typer.Option(
+        "H1",
+        "--timeframe",
+        help="Closed MT5 bar timeframe: M15, H1, H4, or D1",
+    ),
+    risk_percent: float = typer.Option(
+        0.25,
+        "--risk-percent",
+        min=0.1,
+        max=1.0,
+        help="Maximum account risk at the stop (0.1-1.0%)",
+    ),
+    max_lot: float = typer.Option(
+        0.1,
+        "--max-lot",
+        min=0.01,
+        max=0.1,
+        help="Hard maximum MT5 trade volume in lots (0.01-0.1)",
+    ),
+    execute_demo: bool = typer.Option(
+        False,
+        "--execute-demo",
+        help="Send the order only after MT5 verifies the connected account is demo",
+    ),
+    analysis_symbol: str = typer.Option(
+        None,
+        "--analysis-symbol",
+        help="TradingView/analysis ticker when the broker's symbol has a suffix, e.g. XAUUSD",
+    ),
+    analysis_exchange: str = typer.Option(
+        None,
+        "--analysis-exchange",
+        help="Override TradingView exchange (defaults to OANDA for gold and FX_IDC for forex)",
+    ),
+    terminal: str = typer.Option(
+        None,
+        "--terminal",
+        help="Path to terminal64.exe (or set TRADINGAGENTS_MT5_TERMINAL)",
+    ),
+    state: str = typer.Option(
+        None,
+        "--state",
+        help="SQLite idempotency log (default: results_dir/paper/mt5-demo.sqlite3)",
+    ),
+):
+    """Analyze one closed MT5 bar; order sending is opt-in and demo-only."""
+    from tradingagents.mt5_demo import TIMEFRAMES, parse_mt5_strategies
+
+    try:
+        selected = parse_mt5_strategies(strategy)
+        if len(selected) != 1:
+            raise ValueError("mt5-demo-cycle accepts exactly one strategy.")
+        if timeframe.upper() not in TIMEFRAMES:
+            raise ValueError(f"Unsupported timeframe {timeframe!r}; use {', '.join(TIMEFRAMES)}.")
+        state_path = Path(
+            state or Path(DEFAULT_CONFIG["results_dir"]) / "paper" / "mt5-demo.sqlite3"
+        )
+        _run_mt5_demo_cycle(
+            symbol.strip(),
+            selected[0],
+            timeframe.upper(),
+            risk_percent,
+            max_lot,
+            execute_demo,
+            state_path,
+            analysis_symbol=analysis_symbol,
+            analysis_exchange=analysis_exchange,
+            terminal_path=terminal,
+        )
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+
+@app.command("mt5-demo-run")
+def mt5_demo_run(
+    symbols: str = typer.Argument(
+        "XAUUSD,EURUSD",
+        help="Comma-separated exact MT5 Market Watch symbols; add broker suffixes if needed",
+    ),
+    strategies: str = typer.Option(
+        "agents,trend,mean-reversion,breakout",
+        "--strategies",
+        help="Comma-separated strategies to run independently",
+    ),
+    timeframe: str = typer.Option("H1", "--timeframe", help="Closed MT5 bar: M15, H1, H4, or D1"),
+    run_at: str = typer.Option("09:00", "--run-at", help="Daily local time in HH:MM"),
+    risk_percent: float = typer.Option(
+        0.25,
+        "--risk-percent",
+        min=0.1,
+        max=1.0,
+        help="Maximum account risk at the stop (0.1-1.0%)",
+    ),
+    max_lot: float = typer.Option(0.1, "--max-lot", min=0.01, max=0.1),
+    execute_demo: bool = typer.Option(
+        False,
+        "--execute-demo",
+        help="Enable order sending after verifying the MT5 account is demo",
+    ),
+    analysis_exchange: str = typer.Option(
+        None,
+        "--analysis-exchange",
+        help="Override TradingView exchange (defaults to OANDA for gold and FX_IDC for forex)",
+    ),
+    analysis_symbols: str = typer.Option(
+        None,
+        "--analysis-symbols",
+        help="Comma-separated TradingView symbols aligned with the MT5 symbols list",
+    ),
+    terminal: str = typer.Option(None, "--terminal", help="Path to terminal64.exe"),
+    state: str = typer.Option(None, "--state", help="SQLite idempotency log path"),
+):
+    """Run daily MT5 analysis cycles; live accounts are always rejected."""
+    from tradingagents.mt5_demo import TIMEFRAMES, parse_mt5_strategies
+
+    try:
+        selected_symbols = list(
+            dict.fromkeys(item.strip() for item in symbols.split(",") if item.strip())
+        )
+        selected_strategies = parse_mt5_strategies(strategies)
+        if not selected_symbols:
+            raise ValueError("Pass at least one exact MT5 symbol.")
+        selected_analysis_symbols = (
+            [item.strip() for item in analysis_symbols.split(",")]
+            if analysis_symbols is not None
+            else [None] * len(selected_symbols)
+        )
+        if len(selected_analysis_symbols) != len(selected_symbols) or any(
+            analysis_symbol == "" for analysis_symbol in selected_analysis_symbols
+        ):
+            raise ValueError("--analysis-symbols must provide one non-empty item per MT5 symbol.")
+        if timeframe.upper() not in TIMEFRAMES:
+            raise ValueError(f"Unsupported timeframe {timeframe!r}; use {', '.join(TIMEFRAMES)}.")
+        if execute_demo and len(selected_strategies) != 1:
+            raise ValueError(
+                "Use one strategy per MT5 account when sending demo orders; "
+                "multiple strategies may compete for the same positions."
+            )
+        scheduled_time = datetime.strptime(run_at, "%H:%M").time()
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    state_path = Path(state or Path(DEFAULT_CONFIG["results_dir"]) / "paper" / "mt5-demo.sqlite3")
+    console.print(
+        f"[bold]MT5 demo bot started[/bold] — {', '.join(selected_symbols)} · "
+        f"{', '.join(selected_strategies)} · {timeframe.upper()} · daily at {run_at}"
+    )
+    console.print("[dim]No orders without --execute-demo; live accounts are always rejected.[/dim]")
+    try:
+        while True:
+            now = datetime.now()
+            next_run = now.replace(
+                hour=scheduled_time.hour,
+                minute=scheduled_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            if next_run <= now:
+                next_run += timedelta(days=1)
+            console.print(f"Next MT5 cycle: {next_run:%Y-%m-%d %H:%M}")
+            time.sleep(max(0, (next_run - now).total_seconds()))
+            for symbol, analysis_symbol in zip(
+                selected_symbols, selected_analysis_symbols, strict=True
+            ):
+                for selected_strategy in selected_strategies:
+                    try:
+                        _run_mt5_demo_cycle(
+                            symbol,
+                            selected_strategy,
+                            timeframe.upper(),
+                            risk_percent,
+                            max_lot,
+                            execute_demo,
+                            state_path,
+                            analysis_symbol=analysis_symbol,
+                            analysis_exchange=analysis_exchange,
+                            terminal_path=terminal,
+                        )
+                    except Exception as exc:
+                        console.print(
+                            f"[red]MT5 demo cycle failed for {symbol} "
+                            f"({selected_strategy}): {exc}[/red]"
+                        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]MT5 demo bot stopped.[/yellow]")
+
+
+@app.command("mt5-demo-report")
+def mt5_demo_report(
+    state: str = typer.Option(
+        None,
+        "--state",
+        help="SQLite signal/order log (default: results_dir/paper/mt5-demo.sqlite3)",
+    ),
+):
+    """Summarize saved MT5 strategy signals and demo-order outcomes."""
+    from tradingagents.mt5_demo import MT5DemoLedger
+
+    state_path = Path(state or Path(DEFAULT_CONFIG["results_dir"]) / "paper" / "mt5-demo.sqlite3")
+    if not state_path.is_file():
+        console.print(f"No MT5 cycles are recorded yet: {state_path}")
+        return
+
+    ledger = MT5DemoLedger(state_path)
+    try:
+        rows = ledger.summary()
+    finally:
+        ledger.close()
+    if not rows:
+        console.print(f"No MT5 cycles are recorded yet: {state_path}")
+        return
+
+    console.print("[bold]MT5 strategy signal log[/bold]")
+    console.print("Symbol · timeframe · strategy · signal · status · cycles")
+    for symbol, timeframe, strategy, signal, status, count in rows:
+        console.print(f"{symbol} · {timeframe} · {strategy} · {signal} · {status} · {count}")
+    console.print(f"Log: {state_path}")
+
+
+@app.command("dashboard")
+def dashboard(
+    port: int = typer.Option(8765, "--port", min=1, max=65535, help="Local dashboard port"),
+    open_browser: bool = typer.Option(
+        True,
+        "--open-browser/--no-open-browser",
+        help="Open the dashboard in your default browser",
+    ),
+    require_server: str = typer.Option(
+        None,
+        "--require-server",
+        help="Only send demo orders when the MT5 server name contains this text, e.g. GoldCity",
+    ),
+):
+    """Open the local web dashboard for MT5 demo analysis."""
+    from cli.dashboard import serve_dashboard
+
+    try:
+        serve_dashboard(port=port, open_browser=open_browser, required_server=require_server)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Could not start the local dashboard: {exc}[/red]")
+        raise typer.Exit(code=1) from None
 
 
 if __name__ == "__main__":

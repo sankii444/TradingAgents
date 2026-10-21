@@ -39,6 +39,13 @@ dev = [
 bedrock = [
     "langchain-aws>=1.7.9",
 ]
+# MetaTrader 5 Python integration; requires the Windows MT5 terminal.
+mt5 = [
+    "MetaTrader5>=5.0.45; platform_system == 'Windows'",
+]
+tradingview = [
+    "tradingview-ta>=3.3.0",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"

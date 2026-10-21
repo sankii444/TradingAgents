@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>TradingAgents · panel demo</title>
+    <link rel="stylesheet" href="/dashboard.css">
+    <script src="/dashboard.js" defer></script>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="TradingAgents — strona główna">
+          <span class="brand-mark">TA</span>
+          <span><strong>TradingAgents</strong><small>CONTROL ROOM</small></span>
+        </a>
+        <div class="connection">
+          <span id="status-dot" class="status-dot"></span>
+          <span id="connection-label">Sprawdzam terminal MT5…</span>
+          <button id="refresh-status" class="icon-button" type="button" title="Odśwież status">↻</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div>
+            <p class="eyebrow">PANEL TESTOWY · WYŁĄCZNIE DEMO</p>
+            <h1>Rynek pod kontrolą.</h1>
+            <p class="hero-copy">Analizuj sygnały, sprawdzaj poziomy ryzyka i zapisuj wyniki. Żadne zlecenie nie zostanie wysłane bez osobnego potwierdzenia.</p>
+          </div>
+          <div class="hero-status">
+            <span class="pulse"></span>
+            <div><strong id="server-name">MT5 DEMO</strong><small id="server-detail">Weryfikacja połączenia</small></div>
+          </div>
+        </section>
+
+        <section class="workspace">
+          <div class="panel form-panel">
+            <div class="section-heading">
+              <div><p class="eyebrow">NOWA ANALIZA</p><h2>Ustaw parametry</h2></div>
+              <span class="step">01 / 02</span>
+            </div>
+            <form id="analysis-form">
+              <label class="field">
+                <span>Symbol z MT5 Market Watch</span>
+                <input name="symbol" value="XAUUSD" maxlength="32" autocomplete="off" list="symbol-options" required>
+                <datalist id="symbol-options"></datalist>
+                <small>Wybierz z listy Market Watch albo wpisz dokładną nazwę brokera, np. GOLD, XAUUSD lub EURUSD.a</small>
+              </label>
+              <div class="field-row">
+                <label class="field">
+                  <span>Interwał</span>
+                  <select name="timeframe">
+                    <option value="M15">15 minut</option>
+                    <option value="H1" selected>1 godzina</option>
+                    <option value="H4">4 godziny</option>
+                    <option value="D1">1 dzień</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Strategia</span>
+                  <select name="strategy">
+                    <option value="tradingview" selected>TradingView</option>
+                    <option value="agents">TradingAgents AI</option>
+                    <option value="trend">Trend EMA 20/50</option>
+                    <option value="mean-reversion">Powrót RSI</option>
+                    <option value="breakout">Wybicie 20 dni</option>
+                  </select>
+                </label>
+              </div>
+              <details class="advanced">
+                <summary>Opcje ryzyka i źródła analizy</summary>
+                <div class="field-row advanced-fields">
+                  <label class="field">
+                    <span>Ryzyko na transakcję (%)</span>
+                    <input name="risk_percent" type="number" min="0.1" max="1" step="0.05" value="0.25">
+                  </label>
+                  <label class="field">
+                    <span>Maks. wolumen (loty)</span>
+                    <input name="max_lot" type="number" min="0.01" max="0.1" step="0.01" value="0.1">
+                  </label>
+                </div>
+                <div class="field-row advanced-fields">
+                  <label class="field">
+                    <span>Symbol TradingView <em>opcjonalnie</em></span>
+                    <input name="analysis_symbol" placeholder="np. XAUUSD">
+                  </label>
+                  <label class="field">
+                    <span>Giełda TradingView <em>opcjonalnie</em></span>
+                    <input name="analysis_exchange" placeholder="auto: OANDA / FX_IDC">
+                  </label>
+                </div>
+              </details>
+              <button id="analyze-button" class="button button-primary" type="submit">
+                <span>Analizuj rynek</span><span aria-hidden="true">↗</span>
+              </button>
+            </form>
+            <div class="guard-note"><span>◆</span><p><strong>Najpierw podgląd.</strong> Analiza pobiera zamkniętą świecę z MT5. Zlecenie demo wymaga drugiego, świadomego kliknięcia.</p></div>
+          </div>
+
+          <section class="panel result-panel" aria-live="polite">
+            <div class="section-heading">
+              <div><p class="eyebrow">WYNIK</p><h2>Podgląd sygnału</h2></div>
+              <span id="result-time" class="muted">Oczekuje na analizę</span>
+            </div>
+            <div id="empty-state" class="empty-state">
+              <div class="chart-glyph" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+              <h3>Twoja analiza pojawi się tutaj</h3>
+              <p>Wybierz instrument i strategię. Panel nie wykonuje transakcji podczas analizy.</p>
+            </div>
+            <div id="analysis-result" class="analysis-result hidden">
+              <div class="signal-heading">
+                <div><span id="result-symbol" class="result-symbol">XAUUSD</span><small id="result-meta"></small></div>
+                <span id="signal-pill" class="signal-pill">HOLD</span>
+              </div>
+              <div class="price-card">
+                <span>Cena zamknięcia świecy</span>
+                <strong id="result-price">—</strong>
+                <small id="result-rating"></small>
+              </div>
+              <div class="metrics">
+                <div><span>Wolumen</span><strong id="result-volume">—</strong></div>
+                <div><span>Stop loss</span><strong id="result-stop">—</strong></div>
+                <div><span>Take profit</span><strong id="result-target">—</strong></div>
+                <div><span>Ryzyko est.</span><strong id="result-risk">—</strong></div>
+              </div>
+              <p id="result-action" class="action-message"></p>
+              <button id="execute-button" class="button button-danger hidden" type="button">
+                <span>Potwierdzam — wyślij zlecenie DEMO</span><span aria-hidden="true">→</span>
+              </button>
+              <p id="execute-warning" class="execute-warning hidden">Przed kliknięciem sprawdź sygnał, wolumen, stop i cel. Wysłanie jest możliwe tylko po potwierdzeniu konta DEMO.</p>
+              <p id="execute-blocked" class="execute-blocked hidden"></p>
+            </div>
+            <div id="error-box" class="error-box hidden" role="alert"></div>
+          </section>
+        </section>
+
+        <section class="panel history-panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">DZIENNIK TESTÓW</p><h2>Ostatnie cykle</h2></div>
+            <button id="refresh-history" class="text-button" type="button">Odśwież historię ↻</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Instrument</th><th>Interwał</th><th>Strategia</th><th>Sygnał</th><th>Status</th><th>Czas (UTC)</th></tr></thead>
+              <tbody id="history-body"><tr><td colspan="6" class="table-empty">Brak zapisanych cykli. Historia zostanie zapisana lokalnie.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <footer><span>TRADINGAGENTS · LOKALNY PANEL</span><span>Symulacja/demo — nie porada inwestycyjna</span></footer>
+    </div>
+    <div id="toast" class="toast hidden" role="status"></div>
+  </body>
+</html>
