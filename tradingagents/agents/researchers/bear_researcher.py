@@ -21,20 +21,54 @@ def create_bear_researcher(llm):
         fundamentals_report = report_or_absent(state["fundamentals_report"], "fundamentals")
         instrument_context = get_instrument_context_from_state(state)
         asset_type = state.get("asset_type", "stock")
-        target_label = "stock" if asset_type == "stock" else "asset"
-        fundamentals_label = (
-            "Company fundamentals report"
-            if asset_type == "stock"
-            else "Asset fundamentals report (may be unavailable for crypto)"
-        )
+        if asset_type == "forex":
+            target_label = "currency pair"
+            role_intro = (
+                "You are a Bear Analyst making the case against the currency pair. "
+                "Build a strong, evidence-based risk case from the supplied research."
+            )
+            fundamentals_label = "Corporate fundamentals (not applicable to spot FX)"
+            focus_guidance = (
+                "- Relative interest rates, central-bank policy, inflation, and economic releases\n"
+                "- Risks that could weaken the base currency relative to the quote currency\n"
+                "- Market trends and adverse evidence in the supplied reports\n"
+            )
+        elif asset_type == "commodity":
+            target_label = "commodity"
+            role_intro = (
+                "You are a Bear Analyst making the case against the commodity. "
+                "Build a strong, evidence-based risk case from the supplied research."
+            )
+            fundamentals_label = "Corporate fundamentals (not applicable to commodities)"
+            focus_guidance = (
+                "- Oversupply, rising inventories, or weakening end-user demand\n"
+                "- Production, seasonality, and adverse futures-market conditions\n"
+                "- Macroeconomic risks and negative evidence in the supplied reports\n"
+            )
+        else:
+            target_label = "stock" if asset_type == "stock" else "asset"
+            role_intro = (
+                f"You are a Bear Analyst making the case against investing in the {target_label}. "
+                "Your goal is to present a well-reasoned argument emphasizing risks, challenges, and "
+                "negative indicators. Leverage the provided research and data to highlight potential "
+                "downsides and counter bullish arguments effectively."
+            )
+            fundamentals_label = (
+                "Company fundamentals report"
+                if asset_type == "stock"
+                else "Asset fundamentals report (may be unavailable for crypto)"
+            )
+            focus_guidance = (
+                "- Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.\n"
+                "- Competitive Weaknesses: Emphasize vulnerabilities such as weaker market positioning, declining innovation, or threats from competitors.\n"
+                "- Negative Indicators: Use evidence from financial data, market trends, or recent adverse news to support your position.\n"
+            )
 
-        prompt = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
+        prompt = f"""{role_intro}
 
 Key points to focus on:
 
-- Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.
-- Competitive Weaknesses: Emphasize vulnerabilities such as weaker market positioning, declining innovation, or threats from competitors.
-- Negative Indicators: Use evidence from financial data, market trends, or recent adverse news to support your position.
+{focus_guidance}
 - Bull Counterpoints: Critically analyze the bull argument with specific data and sound reasoning, exposing weaknesses or over-optimistic assumptions.
 - Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
 

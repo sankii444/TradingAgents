@@ -13,3 +13,5 @@ class AnalystType(StrEnum):
 class AssetType(StrEnum):
     STOCK = "stock"
     CRYPTO = "crypto"
+    FOREX = "forex"
+    COMMODITY = "commodity"

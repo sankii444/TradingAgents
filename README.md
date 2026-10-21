@@ -224,6 +224,7 @@ TradingAgents works with any market Yahoo Finance covers, using the exchange-suf
 - India: `RELIANCE.NS`, `.BO` · Canada: `.TO` · Australia: `.AX`
 - China A-shares: Shanghai `.SS`, Shenzhen `.SZ` (e.g. `600519.SS` for Kweichow Moutai)
 - Crypto: `BTC-USD`, `ETH-USD`
+- Spot forex: `EURUSD`, `GBPUSD`, `AUDUSD`, `NZDUSD` (Yahoo symbols end in `=X`)
 
 <p align="center">
   <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">

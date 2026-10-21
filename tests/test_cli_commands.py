@@ -170,6 +170,23 @@ def test_backtest_takes_its_analysts_as_an_analysis_does(runner, monkeypatch, tm
 
 
 @pytest.mark.unit
+def test_backtest_forex_omits_company_fundamentals(runner, monkeypatch, tmp_path):
+    swept = []
+    monkeypatch.setattr(m, "run_backtest", lambda *a, **kw: swept.append(kw) or _Result(tmp_path))
+    monkeypatch.setattr(m, "summarize", lambda log: _Summary())
+
+    result = runner.invoke(
+        m.app,
+        ["backtest", "EURUSD", "--start", "2026-06-01", "--end", "2026-06-01",
+         "--asset-type", "forex"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert swept[0]["asset_type"] == "forex"
+    assert swept[0]["selected_analysts"] == ["market", "social", "news"]
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("args", [
     pytest.param(["--analysts", "fundamentals", "--asset-type", "crypto"], id="unavailable_for_crypto"),
     pytest.param(["--asset-type", "bond"], id="unknown_asset_type"),

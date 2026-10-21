@@ -124,9 +124,21 @@ def build_instrument_context(
     on the analysis date.
     """
     is_crypto = asset_type == "crypto"
-    instrument_label = "asset" if is_crypto else "instrument"
+    is_forex = asset_type == "forex"
+    is_commodity = asset_type == "commodity"
+    instrument_label = (
+        "currency pair"
+        if is_forex
+        else "commodity"
+        if is_commodity
+        else "asset"
+        if is_crypto
+        else "instrument"
+    )
+    pair = ticker[:-2] if ticker.upper().endswith("=X") else ticker
+    display_ticker = f"{pair[:3]}/{pair[3:]}" if is_forex and len(pair) == 6 else ticker
     context = (
-        f"The {instrument_label} to analyze is `{ticker}`. "
+        f"The {instrument_label} to analyze is `{display_ticker}` (ticker `{ticker}`). "
         "The tools serve this instrument; refer to it by this exact ticker in every report and recommendation, "
         "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`)."
     )
@@ -135,7 +147,19 @@ def build_instrument_context(
     name = identity.get("company_name") or identity.get("name")
     label = "Name" if is_crypto else "Company"
     details = []
-    if is_historical(trade_date):
+    if is_forex:
+        context += (
+            " This is spot foreign exchange: the first currency is the base currency and the second is the "
+            "quote currency. Analyze exchange-rate and central-bank drivers, not company earnings or equity "
+            "fundamentals."
+        )
+    elif is_commodity:
+        context += (
+            " This is a commodity, not a company or currency pair. Analyze the commodity's supply and "
+            "demand, relevant macroeconomic drivers, and futures-market conditions; do not invent company "
+            "earnings or treat the ticker as a currency pair."
+        )
+    elif is_historical(trade_date):
         if name:
             details.append(
                 f"{label}: {name} (its current name, given only to identify it; "

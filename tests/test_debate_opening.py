@@ -85,6 +85,27 @@ def test_researcher_passes_real_opponent_argument():
     assert "has not spoken yet" not in captured["prompt"]
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "factory, evidence",
+    [
+        (create_bull_researcher, "Supply constraints"),
+        (create_bear_researcher, "Oversupply"),
+    ],
+)
+def test_commodity_researchers_use_market_specific_evidence(factory, evidence):
+    captured = {}
+    state = _investment_state("")
+    state["asset_type"] = "commodity"
+    state["company_of_interest"] = "XAUUSD"
+    factory(_capturing_llm(captured))(state)
+
+    assert evidence in captured["prompt"]
+    assert "not applicable to commodities" in captured["prompt"]
+    assert "making the case for the currency pair" not in captured["prompt"]
+    assert "making the case against the currency pair" not in captured["prompt"]
+
+
 # --- risk debators ----------------------------------------------------------
 
 @pytest.mark.unit

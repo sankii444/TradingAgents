@@ -14,6 +14,10 @@ class CryptoAssetModeTests(unittest.TestCase):
         self.assertEqual(detect_asset_type("AAPL"), AssetType.STOCK)
         self.assertEqual(detect_asset_type("SPY"), AssetType.STOCK)
 
+    def test_detects_forex_pairs(self):
+        self.assertEqual(detect_asset_type("EURUSD"), AssetType.FOREX)
+        self.assertEqual(detect_asset_type("GBPJPY=X"), AssetType.FOREX)
+
     def test_filters_out_fundamentals_analyst_for_crypto(self):
         analysts = [
             AnalystType.MARKET,
@@ -42,6 +46,18 @@ class CryptoAssetModeTests(unittest.TestCase):
         self.assertEqual(
             filter_analysts_for_asset_type(analysts, AssetType.STOCK),
             analysts,
+        )
+
+    def test_filters_out_fundamentals_analyst_for_forex(self):
+        analysts = [
+            AnalystType.MARKET,
+            AnalystType.SOCIAL,
+            AnalystType.NEWS,
+            AnalystType.FUNDAMENTALS,
+        ]
+        self.assertEqual(
+            filter_analysts_for_asset_type(analysts, AssetType.FOREX),
+            [AnalystType.MARKET, AnalystType.SOCIAL, AnalystType.NEWS],
         )
 
     def test_propagator_includes_asset_type_in_initial_state(self):
