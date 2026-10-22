@@ -318,7 +318,11 @@ tradingagents mt5-demo-run GOLD --strategies trend,mean-reversion,breakout,tradi
 
 Hourly mode analyzes once immediately, then at the start of each local hour.
 The `agents` strategy is intentionally omitted here because repeated LLM
-analysis can incur provider charges. Stop the test early with Ctrl+C.
+analysis can incur provider charges. Stop the test early with Ctrl+C. Hours the
+computer spends asleep are skipped; after it wakes, the runner continues within
+a minute, so keep it awake for an unbroken test. A cycle that fails because MT5
+is reconnecting, a quote is stale, or TradingView does not answer is retried
+once two minutes later.
 
 Two daily commodity strategies come from the
 [awesome-systematic-trading](https://github.com/paperswithbacktest/awesome-systematic-trading)

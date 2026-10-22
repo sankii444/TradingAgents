@@ -420,6 +420,73 @@ def test_demo_runner_can_compare_all_signals_hourly_for_limited_duration(monkeyp
 
 
 @pytest.mark.unit
+def test_runner_retries_cycles_that_failed_for_a_passing_reason(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    import cli.main as cli_main
+
+    calls, waits = [], []
+
+    def cycle(symbol, strategy, *_args, **_kwargs):
+        calls.append(strategy)
+        if strategy == "trend" and calls.count("trend") == 1:
+            raise RuntimeError("Could not connect to MetaTrader 5: (-10005, 'IPC timeout').")
+        if strategy == "gold-silver":
+            raise ValueError("The gold-silver strategy trades gold; EURUSD is not a gold symbol.")
+
+    def wait(moment):
+        waits.append(moment)
+        if len(waits) == 2:  # the retry wait passed; stop at the wait for the next hour
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_main, "_run_mt5_demo_cycle", cycle)
+    monkeypatch.setattr(cli_main, "_sleep_until", wait)
+
+    result = CliRunner().invoke(
+        cli_main.app,
+        [
+            "mt5-demo-run",
+            "EURUSD",
+            "--strategies",
+            "trend,breakout,gold-silver",
+            "--every-hour",
+            "--state",
+            str(tmp_path / "mt5.sqlite3"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["trend", "breakout", "gold-silver", "trend"]
+    assert "Retrying 1 failed cycle(s) in 2 minutes" in result.output
+
+
+@pytest.mark.unit
+def test_runner_wait_notices_a_computer_that_slept_past_the_next_cycle(monkeypatch):
+    from datetime import timedelta
+
+    import cli.main as cli_main
+
+    clock = [datetime(2026, 10, 22, 13, 29, 34)]
+    naps = []
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+
+    def nap(seconds):
+        naps.append(seconds)
+        clock[0] += timedelta(hours=2)  # the computer slept during this nap
+
+    monkeypatch.setattr(cli_main, "datetime", Clock)
+    monkeypatch.setattr(cli_main.time, "sleep", nap)
+
+    cli_main._sleep_until(datetime(2026, 10, 22, 14, 0))
+
+    assert naps == [60]
+
+
+@pytest.mark.unit
 def test_tradingview_analysis_maps_rating_and_uses_configured_symbol_exchange():
     requests = []
 

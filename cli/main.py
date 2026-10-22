@@ -541,6 +541,19 @@ def _update_journal(state_path: Path, journal_dir: str) -> None:
         console.print(f"[dim]Journal: updated {len(changed)} note(s) in {journal_dir}[/dim]")
 
 
+MT5_RETRY_DELAY_SECONDS = 120
+
+
+def _sleep_until(moment: datetime) -> None:
+    """Wait for a wall-clock time in short naps.
+
+    time.sleep() does not count time the computer spends asleep, so one long sleep would run
+    late by however long the computer slept; a nap at most a minute long notices the clock.
+    """
+    while (remaining := (moment - datetime.now()).total_seconds()) > 0:
+        time.sleep(min(remaining, 60))
+
+
 @app.command("mt5-demo-cycle")
 def mt5_demo_cycle(
     symbol: str = typer.Argument(
@@ -723,33 +736,52 @@ def mt5_demo_run(
         f"{', '.join(selected_strategies)} · {timeframe.upper()} · {schedule_description}"
     )
     console.print("[dim]No orders without --execute-demo; live accounts are always rejected.[/dim]")
-    deadline = (
-        time.monotonic() + duration_days * 24 * 60 * 60 if duration_days is not None else None
-    )
+    # Wall-clock times, so a computer that sleeps does not stretch the schedule.
+    deadline = datetime.now() + timedelta(days=duration_days) if duration_days is not None else None
+
+    def run_round(cycles):
+        """Run the cycles; return those that failed for a reason that may pass (RuntimeError)."""
+        transient = []
+        for symbol, analysis_symbol, selected_strategy in cycles:
+            try:
+                _run_mt5_demo_cycle(
+                    symbol,
+                    selected_strategy,
+                    timeframe.upper(),
+                    risk_percent,
+                    max_lot,
+                    execute_demo,
+                    state_path,
+                    analysis_symbol=analysis_symbol,
+                    analysis_exchange=analysis_exchange,
+                    terminal_path=terminal,
+                )
+            except Exception as exc:
+                console.print(
+                    f"[red]MT5 demo cycle failed for {symbol} ({selected_strategy}): {exc}[/red]"
+                )
+                if isinstance(exc, RuntimeError):
+                    transient.append((symbol, analysis_symbol, selected_strategy))
+        return transient
 
     def run_cycles():
-        for symbol, analysis_symbol in zip(
-            selected_symbols, selected_analysis_symbols, strict=True
-        ):
-            for selected_strategy in selected_strategies:
-                try:
-                    _run_mt5_demo_cycle(
-                        symbol,
-                        selected_strategy,
-                        timeframe.upper(),
-                        risk_percent,
-                        max_lot,
-                        execute_demo,
-                        state_path,
-                        analysis_symbol=analysis_symbol,
-                        analysis_exchange=analysis_exchange,
-                        terminal_path=terminal,
-                    )
-                except Exception as exc:
-                    console.print(
-                        f"[red]MT5 demo cycle failed for {symbol} "
-                        f"({selected_strategy}): {exc}[/red]"
-                    )
+        failed = run_round(
+            [
+                (symbol, analysis_symbol, selected_strategy)
+                for symbol, analysis_symbol in zip(
+                    selected_symbols, selected_analysis_symbols, strict=True
+                )
+                for selected_strategy in selected_strategies
+            ]
+        )
+        if failed:
+            # A terminal that is reconnecting or a stale quote usually recovers within minutes.
+            console.print(
+                f"[yellow]Retrying {len(failed)} failed cycle(s) in "
+                f"{MT5_RETRY_DELAY_SECONDS // 60} minutes.[/yellow]"
+            )
+            _sleep_until(datetime.now() + timedelta(seconds=MT5_RETRY_DELAY_SECONDS))
+            run_round(failed)
         if journal:
             _update_journal(state_path, journal)
 
@@ -757,7 +789,7 @@ def mt5_demo_run(
         if every_hour:
             run_cycles()
         while True:
-            if deadline is not None and time.monotonic() >= deadline:
+            if deadline is not None and datetime.now() >= deadline:
                 console.print("[yellow]MT5 demo test duration completed.[/yellow]")
                 break
             now = datetime.now()
@@ -773,16 +805,12 @@ def mt5_demo_run(
                 if next_run <= now:
                     next_run += timedelta(days=1)
             console.print(f"Next MT5 cycle: {next_run:%Y-%m-%d %H:%M}")
-            sleep_seconds = max(0, (next_run - now).total_seconds())
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= sleep_seconds:
-                    time.sleep(max(0, remaining))
-                    console.print("[yellow]MT5 demo test duration completed.[/yellow]")
-                    break
-            time.sleep(sleep_seconds)
-            if deadline is None or time.monotonic() < deadline:
-                run_cycles()
+            if deadline is not None and deadline <= next_run:
+                _sleep_until(deadline)
+                console.print("[yellow]MT5 demo test duration completed.[/yellow]")
+                break
+            _sleep_until(next_run)
+            run_cycles()
     except KeyboardInterrupt:
         console.print("\n[yellow]MT5 demo bot stopped.[/yellow]")
 
