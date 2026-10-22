@@ -529,6 +529,18 @@ def _run_mt5_demo_cycle(
     console.print("[dim]Orders are restricted to a verified MT5 demo account.[/dim]")
 
 
+def _update_journal(state_path: Path, journal_dir: str) -> None:
+    from tradingagents.mt5_journal import write_journal
+
+    try:
+        changed = write_journal(state_path, journal_dir)
+    except Exception as exc:  # a notes problem must never stop the trading cycles
+        console.print(f"[yellow]Could not update the journal in {journal_dir}: {exc}[/yellow]")
+        return
+    if changed:
+        console.print(f"[dim]Journal: updated {len(changed)} note(s) in {journal_dir}[/dim]")
+
+
 @app.command("mt5-demo-cycle")
 def mt5_demo_cycle(
     symbol: str = typer.Argument(
@@ -664,6 +676,12 @@ def mt5_demo_run(
     ),
     terminal: str = typer.Option(None, "--terminal", help="Path to terminal64.exe"),
     state: str = typer.Option(None, "--state", help="SQLite idempotency log path"),
+    journal: str = typer.Option(
+        None,
+        "--journal",
+        help="Folder (e.g. in an Obsidian vault) for daily signal notes and a summary, "
+        "rewritten after every round",
+    ),
 ):
     """Run scheduled MT5 analysis cycles; live accounts are always rejected."""
     from tradingagents.mt5_demo import TIMEFRAMES, parse_mt5_strategies
@@ -732,6 +750,8 @@ def mt5_demo_run(
                         f"[red]MT5 demo cycle failed for {symbol} "
                         f"({selected_strategy}): {exc}[/red]"
                     )
+        if journal:
+            _update_journal(state_path, journal)
 
     try:
         if every_hour:
@@ -765,6 +785,29 @@ def mt5_demo_run(
                 run_cycles()
     except KeyboardInterrupt:
         console.print("\n[yellow]MT5 demo bot stopped.[/yellow]")
+
+
+@app.command("mt5-demo-journal")
+def mt5_demo_journal(
+    journal: str = typer.Argument(..., help="Folder for the notes, e.g. inside an Obsidian vault"),
+    state: str = typer.Option(
+        None,
+        "--state",
+        help="SQLite signal/order log (default: results_dir/paper/mt5-demo.sqlite3)",
+    ),
+):
+    """Write the MT5 signal log as daily Markdown notes and a summary, e.g. for Obsidian."""
+    import sqlite3
+
+    from tradingagents.mt5_journal import write_journal
+
+    state_path = Path(state or Path(DEFAULT_CONFIG["results_dir"]) / "paper" / "mt5-demo.sqlite3")
+    try:
+        changed = write_journal(state_path, journal)
+    except (OSError, sqlite3.Error) as exc:
+        console.print(f"[red]Could not write the journal: {exc}[/red]")
+        raise typer.Exit(code=1) from None
+    console.print(f"Journal in {journal}: {len(changed)} note(s) updated from {state_path}")
 
 
 @app.command("mt5-demo-report")

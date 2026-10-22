@@ -337,6 +337,14 @@ Both read daily bars, so in an hourly test their signal changes at most once a
 day. The windows and the threshold are choices within the papers' ranges, and
 the papers' portfolio results do not carry over to a single gold position.
 
+To keep a readable journal, for example in an Obsidian vault, add
+`--journal "D:\Notes\Bot MT5"` to `mt5-demo-run`. After every round it rewrites
+one Markdown note per day with each candle's close and every strategy's signal,
+plus a summary of how often each strategy's BUY or SELL matched the next
+candle's close. `tradingagents mt5-demo-journal "D:\Notes\Bot MT5"` writes the
+same notes on demand. The notes are regenerated from the signal log, so edits
+to them are overwritten.
+
 Review the locally recorded analysis signals and order statuses with:
 
 ```powershell

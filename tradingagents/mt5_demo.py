@@ -451,7 +451,10 @@ class MT5DemoSession:
 
 
 class MT5DemoLedger:
-    """Persistent idempotency and once-per-day entry guard for demo orders."""
+    """Persistent idempotency and once-per-day entry guard for demo orders.
+
+    It also keeps the close of every recorded bar, so signals can be checked afterwards.
+    """
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -496,6 +499,18 @@ class MT5DemoLedger:
                 "FROM cycles_legacy"
             )
             self.connection.execute("DROP TABLE cycles_legacy")
+        # A separate table, so processes still writing `cycles` with older code keep working.
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bars (
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                bar_time INTEGER NOT NULL,
+                close REAL NOT NULL,
+                PRIMARY KEY (symbol, timeframe, bar_time)
+            )
+            """
+        )
         self.connection.commit()
 
     def get_cycle(self, symbol: str, timeframe: str, bar_time: int, strategy: str):
@@ -544,6 +559,10 @@ class MT5DemoLedger:
                 status,
                 result.ticket,
             ),
+        )
+        self.connection.execute(
+            "INSERT OR IGNORE INTO bars VALUES (?, ?, ?, ?)",
+            (market.symbol, market.timeframe, market.bar_time, float(market.snapshot.close)),
         )
         self.connection.commit()
 
