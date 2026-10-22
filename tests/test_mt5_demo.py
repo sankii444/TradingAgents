@@ -199,6 +199,16 @@ def test_market_data_rejects_stale_quote_after_timezone_normalization():
 
 
 @pytest.mark.unit
+def test_market_data_reports_a_tick_older_than_any_timezone_as_stale():
+    mt5 = FakeMT5(server_time_offset_seconds=3 * 60 * 60, quote_age_seconds=20 * 60 * 60)
+    with (
+        MT5DemoSession(mt5_module=mt5) as session,
+        pytest.raises(RuntimeError, match="quote is stale: its time is 17 h off the current time"),
+    ):
+        session.market_data("GOLD")
+
+
+@pytest.mark.unit
 def test_demo_cycle_defaults_to_signal_only(tmp_path):
     mt5 = FakeMT5()
     with MT5DemoSession(mt5_module=mt5) as session:

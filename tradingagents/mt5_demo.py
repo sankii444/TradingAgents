@@ -60,7 +60,12 @@ def _server_utc_offset_seconds(server_time: int, now: float) -> int:
     difference = server_time - now
     offset = round(difference / SERVER_UTC_OFFSET_STEP_SECONDS) * SERVER_UTC_OFFSET_STEP_SECONDS
     if abs(offset) > MAX_SERVER_UTC_OFFSET_SECONDS:
-        raise RuntimeError("MT5 server time offset is outside the supported timezone range.")
+        # No broker clock is that far from UTC, so the last tick itself is old.
+        raise RuntimeError(
+            f"MT5 quote is stale: its time is {abs(difference) / 3600:.0f} h off the current time, "
+            "beyond any broker timezone. If MT5 was just started or woke from sleep, let it "
+            "reconnect and retry; otherwise the market may be closed. Refusing to continue."
+        )
     quote_age = now - (server_time - offset)
     if quote_age < -MAX_QUOTE_CLOCK_AHEAD_SECONDS or quote_age > MAX_QUOTE_AGE_SECONDS:
         raise RuntimeError(
