@@ -27,7 +27,15 @@ TIMEFRAMES = {
     "H4": ("TIMEFRAME_H4", 4 * 60 * 60),
     "D1": ("TIMEFRAME_D1", 24 * 60 * 60),
 }
-MT5_STRATEGIES = ("agents", "trend", "mean-reversion", "breakout", "tradingview")
+MT5_STRATEGIES = (
+    "agents",
+    "trend",
+    "mean-reversion",
+    "breakout",
+    "tradingview",
+    "gold-silver",
+    "commodity-momentum",
+)
 
 
 def parse_mt5_strategies(value: str) -> list[str]:
@@ -163,6 +171,28 @@ class MT5DemoSession:
         """Names of the symbols currently shown in the terminal's Market Watch."""
         symbols = self.mt5.symbols_get() or ()
         return sorted(symbol.name for symbol in symbols if symbol.visible)[:limit]
+
+    def has_symbol(self, symbol: str) -> bool:
+        """Whether the broker offers this symbol, shown in Market Watch or not."""
+        return self.mt5.symbol_info(symbol) is not None
+
+    def daily_closes(self, symbols: list[str], count: int) -> pd.DataFrame:
+        """Closes of the last ``count`` closed daily bars, one column per symbol.
+
+        Rows are the broker's trading days that every symbol has; all symbols share the
+        server clock, so their bar times line up without timezone conversion.
+        """
+        self._require_demo_account()
+        columns = {}
+        for symbol in symbols:
+            rates = self.mt5.copy_rates_from_pos(symbol, self.mt5.TIMEFRAME_D1, 1, count)
+            if rates is None or len(rates) == 0:
+                raise RuntimeError(
+                    f"MT5 returned no daily bars for {symbol}: {self.mt5.last_error()}."
+                )
+            frame = pd.DataFrame(rates)
+            columns[symbol] = pd.Series(frame["close"].to_numpy(), index=frame["time"].to_numpy())
+        return pd.DataFrame(columns).dropna().sort_index()
 
     def market_data(
         self,

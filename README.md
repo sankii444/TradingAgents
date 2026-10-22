@@ -320,6 +320,23 @@ Hourly mode analyzes once immediately, then at the start of each local hour.
 The `agents` strategy is intentionally omitted here because repeated LLM
 analysis can incur provider charges. Stop the test early with Ctrl+C.
 
+Two daily commodity strategies come from the
+[awesome-systematic-trading](https://github.com/paperswithbacktest/awesome-systematic-trading)
+list. They trade a gold symbol and read the broker's other commodities from MT5:
+
+- `gold-silver` scores the gold/silver price ratio against a rolling five-year
+  window of daily closes, after "Rolling vs. Expanding Windows in Mean-Reversion
+  Strategies: Evidence from Gold-Silver and Cross-Asset Validation". A z-score
+  of +2 or more sells gold; -2 or less buys it.
+- `commodity-momentum` follows "How to Improve Commodity Momentum Using
+  Intra-Market Correlation": when gold, silver, copper, oil and gas moved
+  together more over the last month than over the last year, it follows gold's
+  one-month move; otherwise it fades that move.
+
+Both read daily bars, so in an hourly test their signal changes at most once a
+day. The windows and the threshold are choices within the papers' ranges, and
+the papers' portfolio results do not carry over to a single gold position.
+
 Review the locally recorded analysis signals and order statuses with:
 
 ```powershell

@@ -431,7 +431,10 @@ def _mt5_signal(
     analysis_symbol: str | None,
     *,
     analysis_exchange: str | None = None,
+    session=None,
 ):
+    from tradingagents.commodity_strategies import COMMODITY_STRATEGIES, mt5_commodity_signal
+
     if strategy == "tradingview":
         from tradingagents.tradingview_analysis import get_tradingview_signal
 
@@ -441,6 +444,10 @@ def _mt5_signal(
             exchange=analysis_exchange,
         )
         return signal, {"tradingview_recommendation": recommendation}
+    if strategy in COMMODITY_STRATEGIES:
+        if session is None:
+            raise ValueError(f"The {strategy} strategy reads daily bars from an MT5 session.")
+        return mt5_commodity_signal(session, market.symbol, strategy)
     if strategy != "agents":
         return signal_for_strategy(strategy, market.bars), {}
 
@@ -485,6 +492,7 @@ def _run_mt5_demo_cycle(
             strategy,
             analysis_symbol,
             analysis_exchange=analysis_exchange,
+            session=session,
         )
         result = session.evaluate_signal(
             market,
@@ -516,6 +524,8 @@ def _run_mt5_demo_cycle(
         console.print(f"\n{state['final_trade_decision']}")
     if state.get("tradingview_recommendation"):
         console.print(f"TradingView indicator rating: {state['tradingview_recommendation']}")
+    if state.get("strategy_details"):
+        console.print(f"Strategy details: {state['strategy_details']}")
     console.print("[dim]Orders are restricted to a verified MT5 demo account.[/dim]")
 
 
@@ -527,7 +537,8 @@ def mt5_demo_cycle(
     strategy: str = typer.Option(
         "agents",
         "--strategy",
-        help="Signal strategy: agents, trend, mean-reversion, breakout, or tradingview",
+        help="Signal strategy: agents, trend, mean-reversion, breakout, tradingview, "
+        "gold-silver, or commodity-momentum",
     ),
     timeframe: str = typer.Option(
         "H1",

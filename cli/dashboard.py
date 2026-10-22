@@ -89,6 +89,7 @@ def _market_payload(market, signal: str, state: dict, result) -> dict:
         "price": market.snapshot.close,
         "signal": signal,
         "strategy_rating": state.get("tradingview_recommendation"),
+        "details": state.get("strategy_details"),
         "action": result.action,
         "volume": result.volume,
         "stop": result.stop_price,
@@ -121,6 +122,7 @@ def analyze_signal(payload: dict, state_path: Path | None = None) -> dict:
             strategy,
             analysis_symbol,
             analysis_exchange=analysis_exchange,
+            session=session,
         )
         result = session.evaluate_signal(
             market,

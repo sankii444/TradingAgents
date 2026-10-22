@@ -74,7 +74,7 @@ function renderResult(result) {
   document.querySelector("#result-price").textContent = formatPrice(result.price);
   document.querySelector("#result-rating").textContent = result.strategy_rating
     ? `TradingView: ${result.strategy_rating}`
-    : "";
+    : result.details || "";
   document.querySelector("#result-volume").textContent = result.volume
     ? `${Number(result.volume).toLocaleString("pl-PL")} lot`
     : "brak wejścia";
