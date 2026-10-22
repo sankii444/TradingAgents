@@ -98,7 +98,8 @@ def _table(header: list[str], rows: list[list[str]]) -> list[str]:
     ]
 
 
-def _write_if_changed(path: Path, text: str) -> bool:
+def write_note(path: Path, text: str) -> bool:
+    """Write a note unless it already has this text; return whether it changed."""
     data = text.encode("utf-8")
     if path.is_file() and path.read_bytes() == data:
         return False
@@ -254,6 +255,9 @@ def write_journal(
         ]
     else:
         summary.append("Brak zapisanych cykli: notatki pojawią się po pierwszej analizie bota.")
+    backtests = sorted(path.stem for path in journal.glob("Backtest *.md"))
+    if backtests:
+        summary += ["", "## Backtest", "", *(f"- [[{name}]]" for name in backtests)]
 
     changed = []
     for day, sections in sorted(day_sections.items()):
@@ -272,9 +276,9 @@ def write_journal(
             *sections,
         ]
         path = journal / DAY_FOLDER / f"{DAY_NOTE_PREFIX} {day:%Y-%m-%d}.md"
-        if _write_if_changed(path, "\n".join(note).rstrip() + "\n"):
+        if write_note(path, "\n".join(note).rstrip() + "\n"):
             changed.append(path)
     summary_path = journal / f"{SUMMARY_NOTE}.md"
-    if _write_if_changed(summary_path, "\n".join(summary).rstrip() + "\n"):
+    if write_note(summary_path, "\n".join(summary).rstrip() + "\n"):
         changed.append(summary_path)
     return changed

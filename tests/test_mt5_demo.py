@@ -174,6 +174,32 @@ def test_session_reports_algo_trading_state_and_market_watch_symbols():
 
 
 @pytest.mark.unit
+def test_history_bars_give_spreads_in_price_and_fill_missing_ones():
+    mt5 = FakeMT5()
+    rates = np.array(
+        [
+            (1_000_000 + k * 3600, 100.0, 101.0, 99.0, 100.5, 10, points)
+            for k, points in enumerate((40, 0, 60))
+        ],
+        dtype=[
+            ("time", "i8"),
+            ("open", "f8"),
+            ("high", "f8"),
+            ("low", "f8"),
+            ("close", "f8"),
+            ("tick_volume", "i8"),
+            ("spread", "i8"),
+        ],
+    )
+    mt5.copy_rates_from_pos = lambda *_args: rates
+    with MT5DemoSession(mt5_module=mt5) as session:
+        bars = session.history_bars("GOLD", "H1", 3)
+
+    assert list(bars.columns) == ["time", "Open", "High", "Low", "Close", "spread"]
+    assert bars["spread"].tolist() == pytest.approx([0.4, 0.5, 0.6])
+
+
+@pytest.mark.unit
 def test_market_data_normalizes_broker_server_time_to_utc(tmp_path):
     mt5 = FakeMT5(server_time_offset_seconds=3 * 60 * 60)
     with MT5DemoSession(mt5_module=mt5) as session:

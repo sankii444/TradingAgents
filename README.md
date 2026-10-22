@@ -349,6 +349,25 @@ candle's close. `tradingagents mt5-demo-journal "D:\Notes\Bot MT5"` writes the
 same notes on demand. The notes are regenerated from the signal log, so edits
 to them are overwritten.
 
+To see how the strategies would have traded, replay MT5 history with the bot's
+position rules:
+
+```powershell
+tradingagents mt5-backtest GOLD --years 5 --risk-percent 0.1 --journal "D:\Notes\Bot MT5"
+```
+
+Each strategy trades alone: a signal from a closed bar is filled at the next
+bar's open (buys at the ask, using the spread MT5 recorded for that bar), the
+stop is two ATRs away and the target twice that, only those close the position,
+and there is at most one entry a day. When a bar touches both levels the stop
+counts. The command prints each strategy's trades, win rate, R, result and
+maximum drawdown, and `--journal` writes them, with results per year and the
+latest trades, to a "Backtest GOLD H1" note linked from the journal summary.
+`tradingview` and `agents` cannot be replayed: TradingView keeps no history of
+its rating, and the agents would need one language-model analysis per bar. Lot
+rounding, the 0.1-lot cap, swaps and commissions are not modelled, and past
+results do not predict future ones.
+
 Review the locally recorded analysis signals and order statuses with:
 
 ```powershell

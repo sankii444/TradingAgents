@@ -838,6 +838,82 @@ def mt5_demo_journal(
     console.print(f"Journal in {journal}: {len(changed)} note(s) updated from {state_path}")
 
 
+@app.command("mt5-backtest")
+def mt5_backtest(
+    symbol: str = typer.Argument("GOLD", help="Exact gold symbol in MT5 Market Watch"),
+    strategies: str = typer.Option(
+        "trend,mean-reversion,breakout,gold-silver,commodity-momentum",
+        "--strategies",
+        help="Comma-separated strategies to replay; tradingview and agents have no history",
+    ),
+    timeframe: str = typer.Option("H1", "--timeframe", help="Bars to replay: M15, H1, H4, or D1"),
+    years: float = typer.Option(
+        5.0, "--years", min=0.25, max=10.0, help="Years of MT5 history to replay"
+    ),
+    risk_percent: float = typer.Option(
+        0.25, "--risk-percent", min=0.01, max=1.0, help="Balance risked per trade at the stop (%)"
+    ),
+    capital: float = typer.Option(
+        None, "--capital", min=1.0, help="Starting balance (default: the MT5 demo account's equity)"
+    ),
+    journal: str = typer.Option(
+        None, "--journal", help="Folder for the results note, e.g. the bot's Obsidian journal"
+    ),
+    terminal: str = typer.Option(None, "--terminal", help="Path to terminal64.exe"),
+):
+    """Replay MT5 history through the strategies with the bot's stop, target and spread."""
+    from tradingagents.mt5_backtest import (
+        check_strategies,
+        run_mt5_backtest,
+        summarize,
+        write_backtest_note,
+    )
+    from tradingagents.mt5_demo import TIMEFRAMES, MT5DemoSession, parse_mt5_strategies
+
+    try:
+        selected = parse_mt5_strategies(strategies)
+        check_strategies(selected)
+        if timeframe.upper() not in TIMEFRAMES:
+            raise ValueError(f"Unsupported timeframe {timeframe!r}; use {', '.join(TIMEFRAMES)}.")
+        console.print(
+            f"Replaying about {years:g} years of {symbol} {timeframe.upper()} from MT5..."
+        )
+        with MT5DemoSession(terminal_path=terminal) as session:
+            report = run_mt5_backtest(
+                session,
+                symbol.strip(),
+                timeframe.upper(),
+                selected,
+                years=years,
+                risk_percent=risk_percent,
+                capital=capital,
+            )
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    console.print(
+        f"[bold]MT5 backtest — {report.symbol} {report.timeframe}[/bold] · {report.bar_count} bars"
+        f" · risk {risk_percent:g}% · start {report.capital:,.2f} {report.currency}"
+    )
+    for name, trades in report.trades.items():
+        result = summarize(trades, report.capital)
+        win_rate = "n/a" if result["win_rate"] is None else f"{result['win_rate']:.0%}"
+        console.print(
+            f"{name}: {result['trades']} trades, win rate {win_rate}, {result['total_r']:+.1f} R, "
+            f"{result['profit']:+,.2f} {report.currency} ({result['return']:+.2%}), "
+            f"max drawdown {result['max_drawdown']:.2%}"
+        )
+    console.print(f"{report.symbol} buy and hold over the period: {report.buy_and_hold:+.1%}")
+    if journal:
+        try:
+            path = write_backtest_note(report, journal)
+        except OSError as exc:
+            console.print(f"[red]Could not write the results note: {exc}[/red]")
+            raise typer.Exit(code=1) from None
+        console.print(f"Results note: {path}")
+
+
 @app.command("mt5-demo-report")
 def mt5_demo_report(
     state: str = typer.Option(

@@ -194,6 +194,34 @@ class MT5DemoSession:
             columns[symbol] = pd.Series(frame["close"].to_numpy(), index=frame["time"].to_numpy())
         return pd.DataFrame(columns).dropna().sort_index()
 
+    def history_bars(self, symbol: str, timeframe: str, count: int) -> pd.DataFrame:
+        """The last ``count`` closed bars on the server clock, each with its spread in price units.
+
+        Unlike market_data() it needs no fresh quote, so backtests also run while the market is
+        closed. Bars the broker stored without a spread get the median recorded spread.
+        """
+        if timeframe not in TIMEFRAMES:
+            raise ValueError(f"Unsupported timeframe {timeframe!r}; use {', '.join(TIMEFRAMES)}.")
+        self._require_demo_account()
+        info = self.mt5.symbol_info(symbol)
+        if info is None:
+            raise ValueError(
+                f"MT5 symbol {symbol!r} was not found. Use its exact broker symbol from Market Watch."
+            )
+        timeframe_constant = getattr(self.mt5, TIMEFRAMES[timeframe][0])
+        rates = self.mt5.copy_rates_from_pos(symbol, timeframe_constant, 1, count)
+        if rates is None or len(rates) == 0:
+            raise RuntimeError(
+                f"MT5 returned no {timeframe} history for {symbol}: {self.mt5.last_error()}."
+            )
+        bars = pd.DataFrame(rates).rename(
+            columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"}
+        )
+        points = bars["spread"].astype(float)
+        typical = points[points > 0].median() if (points > 0).any() else float(info.spread)
+        bars["spread"] = points.where(points > 0, typical) * float(info.point)
+        return bars[["time", "Open", "High", "Low", "Close", "spread"]].reset_index(drop=True)
+
     def market_data(
         self,
         symbol: str,

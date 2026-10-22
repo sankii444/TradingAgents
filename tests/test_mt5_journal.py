@@ -77,6 +77,19 @@ def test_journal_leaves_unchanged_notes_alone(tmp_path):
 
 
 @pytest.mark.unit
+def test_journal_summary_links_backtest_notes(tmp_path):
+    journal = tmp_path / "Bot MT5"
+    journal.mkdir()
+    (journal / "Backtest GOLD H1.md").write_text("# Backtest", encoding="utf-8")
+
+    write_journal(tmp_path / "missing.sqlite3", journal, tz=UTC, now=NOW)
+
+    assert "- [[Backtest GOLD H1]]" in (journal / "Podsumowanie bota.md").read_text(
+        encoding="utf-8"
+    )
+
+
+@pytest.mark.unit
 def test_journal_explains_an_empty_log(tmp_path):
     journal = tmp_path / "Bot MT5"
 

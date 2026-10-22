@@ -115,8 +115,10 @@ def _find_symbol(session, names: tuple[str, ...], suffix: str) -> str | None:
     return None
 
 
-def mt5_commodity_signal(session, symbol: str, strategy: str) -> tuple[str, dict]:
-    """Compute a commodity strategy's signal for the gold ``symbol`` from MT5 daily bars."""
+def strategy_symbols(session, symbol: str, strategy: str) -> list[str]:
+    """The broker symbols whose daily closes ``strategy`` reads, the gold ``symbol`` first."""
+    if strategy not in COMMODITY_STRATEGIES:
+        raise ValueError(f"Unknown commodity strategy {strategy!r}.")
     base = next((name for name in GOLD_NAMES if symbol.upper().startswith(name)), None)
     if base is None:
         raise ValueError(f"The {strategy} strategy trades gold; {symbol} is not a gold symbol.")
@@ -128,14 +130,31 @@ def mt5_commodity_signal(session, symbol: str, strategy: str) -> tuple[str, dict
                 "The gold-silver strategy needs silver (SILVER or XAGUSD), "
                 "which this MT5 broker does not offer."
             )
-        closes = session.daily_closes([symbol, silver], GOLD_SILVER_WINDOW + EXTRA_DAYS)
-        return gold_silver_signal(closes[symbol], closes[silver])
-    if strategy == "commodity-momentum":
-        basket = [symbol]
-        for names in BASKET_NAMES:
-            found = _find_symbol(session, names, suffix)
-            if found is not None and found not in basket:
-                basket.append(found)
-        closes = session.daily_closes(basket, LONG_CORRELATION_WINDOW + EXTRA_DAYS)
-        return commodity_momentum_signal(closes, symbol)
-    raise ValueError(f"Unknown commodity strategy {strategy!r}.")
+        return [symbol, silver]
+    basket = [symbol]
+    for names in BASKET_NAMES:
+        found = _find_symbol(session, names, suffix)
+        if found is not None and found not in basket:
+            basket.append(found)
+    return basket
+
+
+def history_days(strategy: str) -> int:
+    """Closed daily bars needed for one signal of ``strategy``."""
+    window = GOLD_SILVER_WINDOW if strategy == "gold-silver" else LONG_CORRELATION_WINDOW + 1
+    return window + EXTRA_DAYS
+
+
+def commodity_signal(strategy: str, closes: pd.DataFrame, symbol: str) -> tuple[str, dict]:
+    """The signal from daily ``closes`` laid out as strategy_symbols() returns them."""
+    if strategy == "gold-silver":
+        partner = next(column for column in closes.columns if column != symbol)
+        return gold_silver_signal(closes[symbol], closes[partner])
+    return commodity_momentum_signal(closes, symbol)
+
+
+def mt5_commodity_signal(session, symbol: str, strategy: str) -> tuple[str, dict]:
+    """Compute a commodity strategy's signal for the gold ``symbol`` from MT5 daily bars."""
+    symbols = strategy_symbols(session, symbol, strategy)
+    closes = session.daily_closes(symbols, history_days(strategy))
+    return commodity_signal(strategy, closes, symbol)
