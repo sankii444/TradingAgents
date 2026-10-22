@@ -29,7 +29,7 @@ from tradingagents.commodity_strategies import (
     history_days,
     strategy_symbols,
 )
-from tradingagents.forex_paper import STOP_ATR_MULTIPLE, snapshot_from_frame
+from tradingagents.forex_paper import STOP_ATR_MULTIPLE
 from tradingagents.mt5_demo import TAKE_PROFIT_R, TIMEFRAMES
 from tradingagents.paper_strategies import signal_for_strategy
 
@@ -116,10 +116,13 @@ def simulate(
     capital: float,
     risk_percent: float,
     start: int = WARMUP_BARS,
+    stop_atr: float = STOP_ATR_MULTIPLE,
+    take_profit_r: float = TAKE_PROFIT_R,
 ) -> list[Trade]:
     """Trade the signals over ``bars`` (time, Open, High, Low, Close, spread) by the bot's rules.
 
-    ``signal_at(i)`` and ``atr_at(i)`` may only use bars up to and including ``i``.
+    ``signal_at(i)`` and ``atr_at(i)`` may only use bars up to and including ``i``. The stop is
+    ``stop_atr`` ATRs from the entry and the target ``take_profit_r`` times that distance.
     """
     times = bars["time"].to_numpy(dtype=np.int64)
     opens, highs, lows, closes, spreads = (
@@ -134,17 +137,17 @@ def simulate(
         if position is None:
             direction = DIRECTIONS.get(signal_at(i), 0) if i + 1 < len(bars) else 0
             day = int(times[i]) // 86_400
-            if not direction or day == last_entry_day:
+            distance = stop_atr * atr_at(i) if direction and day != last_entry_day else 0.0
+            if not distance > 0:  # no signal, today's entry already used, or no ATR yet
                 i += 1
                 continue
-            distance = STOP_ATR_MULTIPLE * atr_at(i)
             i += 1
             entry = opens[i] + (spreads[i] if direction > 0 else 0.0)
             position = (direction, int(times[i]), entry, distance, equity * risk_percent / 100)
             last_entry_day = day
         direction, entry_time, entry, distance, risk_amount = position
         stop = entry - direction * distance
-        target = entry + direction * distance * TAKE_PROFIT_R
+        target = entry + direction * distance * take_profit_r
         filled = _exit(direction, stop, target, opens[i], highs[i], lows[i], spreads[i])
         if filled is None and i == len(bars) - 1:
             filled = (closes[i] + (spreads[i] if direction < 0 else 0.0), "end")
@@ -173,6 +176,20 @@ def simulate(
             break
         # The bot finds the position closed at the next hour and reads bar i's signal again.
     return trades
+
+
+def average_true_range(bars: pd.DataFrame, period: int = 14) -> np.ndarray:
+    """The bot's ATR at every bar: the 14-bar mean true range of forex_paper's snapshot."""
+    previous_close = bars["Close"].shift()
+    true_range = pd.concat(
+        [
+            bars["High"] - bars["Low"],
+            (bars["High"] - previous_close).abs(),
+            (bars["Low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return true_range.rolling(period, min_periods=period).mean().to_numpy()
 
 
 def bar_signals(bars: pd.DataFrame, strategy: str) -> Callable[[int], str]:
@@ -231,10 +248,10 @@ def run_mt5_backtest(
         raise ValueError(f"MT5 returned only {len(bars)} {timeframe} bars for {symbol}.")
     account = session.account_details()
     capital = float(capital or account.equity)
-    frame = bars.assign(Date=pd.to_datetime(bars["time"], unit="s"))
+    atr = average_true_range(bars)
 
     def atr_at(i: int) -> float:
-        return snapshot_from_frame(symbol, frame.iloc[max(0, i - 30) : i + 1]).atr
+        return float(atr[i])
 
     trades = {}
     for strategy in strategies:
@@ -287,18 +304,18 @@ def summarize(trades: list[Trade], capital: float) -> dict:
     }
 
 
-def _amount(value: float, *, signed: bool = True, digits: int = 2) -> str:
+def format_amount(value: float, *, signed: bool = True, digits: int = 2) -> str:
     text = f"{value:{'+' if signed else ''},.{digits}f}"
     return text.replace(",", " ").replace(".", ",")
 
 
-def _percent(fraction: float | None, *, signed: bool = True) -> str:
+def format_percent(fraction: float | None, *, signed: bool = True) -> str:
     if fraction is None:
         return "—"
     return f"{fraction * 100:{'+' if signed else ''}.1f}%".replace(".", ",")
 
 
-def _server_time(timestamp: int, pattern: str = "%Y-%m-%d %H:%M") -> str:
+def format_server_time(timestamp: int, pattern: str = "%Y-%m-%d %H:%M") -> str:
     return datetime.fromtimestamp(timestamp, UTC).strftime(pattern)
 
 
@@ -318,17 +335,17 @@ def render_backtest_note(report: BacktestReport, *, now: datetime, summary_note:
                 [
                     name,
                     str(result["trades"]),
-                    _percent(result["win_rate"], signed=False),
-                    "—" if result["average_r"] is None else _amount(result["average_r"]),
-                    _amount(result["total_r"], digits=1),
+                    format_percent(result["win_rate"], signed=False),
+                    "—" if result["average_r"] is None else format_amount(result["average_r"]),
+                    format_amount(result["total_r"], digits=1),
                     "—"
                     if factor is None
                     else "∞"
                     if math.isinf(factor)
-                    else _amount(factor, signed=False),
-                    f"{_amount(result['profit'])} {currency}",
-                    _percent(result["return"]),
-                    _percent(result["max_drawdown"]),
+                    else format_amount(factor, signed=False),
+                    f"{format_amount(result['profit'])} {currency}",
+                    format_percent(result["return"]),
+                    format_percent(result["max_drawdown"]),
                 ]
             )
             + " |"
@@ -336,7 +353,7 @@ def render_backtest_note(report: BacktestReport, *, now: datetime, summary_note:
     years = sorted({year for result in stats.values() for year in result["by_year"]})
     year_rows = [
         f"| {year} | "
-        + " | ".join(_amount(stats[name]["by_year"].get(year, 0.0)) for name in ranked)
+        + " | ".join(format_amount(stats[name]["by_year"].get(year, 0.0)) for name in ranked)
         + " |"
         for year in years
     ]
@@ -352,12 +369,12 @@ def render_backtest_note(report: BacktestReport, *, now: datetime, summary_note:
         "kolejne uruchomienie nadpisze tę notatkę.",
         f"> Wróć do [[{summary_note}]].",
         "",
-        f"- **Okres:** {_server_time(report.first_time, '%d.%m.%Y')} – "
-        f"{_server_time(report.last_time, '%d.%m.%Y')} "
+        f"- **Okres:** {format_server_time(report.first_time, '%d.%m.%Y')} – "
+        f"{format_server_time(report.last_time, '%d.%m.%Y')} "
         f"({report.bar_count} świec {report.timeframe}, czas serwera brokera)",
-        f"- **Kapitał startowy:** {_amount(report.capital, signed=False)} {currency} · "
+        f"- **Kapitał startowy:** {format_amount(report.capital, signed=False)} {currency} · "
         f"**ryzyko:** {risk}% kapitału na transakcję",
-        f"- **Złoto w tym okresie (kup i trzymaj, bez dźwigni):** {_percent(report.buy_and_hold)}",
+        f"- **Złoto w tym okresie (kup i trzymaj, bez dźwigni):** {format_percent(report.buy_and_hold)}",
         "",
         "## Wyniki",
         "",
@@ -379,8 +396,8 @@ def render_backtest_note(report: BacktestReport, *, now: datetime, summary_note:
         "",
         "- Sygnał z zamkniętej świecy, wejście po cenie otwarcia następnej; kupno po cenie ask "
         "(bid + spread zapisany przez MT5 dla tej świecy).",
-        f"- Stop loss {_amount(STOP_ATR_MULTIPLE, signed=False, digits=0)}×ATR(14), take profit "
-        f"{_amount(TAKE_PROFIT_R, signed=False, digits=0)}R; pozycję zamyka tylko jeden z nich, "
+        f"- Stop loss {format_amount(STOP_ATR_MULTIPLE, signed=False, digits=0)}×ATR(14), take profit "
+        f"{format_amount(TAKE_PROFIT_R, signed=False, digits=0)}R; pozycję zamyka tylko jeden z nich, "
         "sprawdzany na cenie bid (długie) albo ask (krótkie).",
         "- Gdy jedna świeca dotyka obu poziomów, liczy się stop loss; luka cenowa zamyka po cenie "
         "otwarcia.",
@@ -415,14 +432,14 @@ def render_backtest_note(report: BacktestReport, *, now: datetime, summary_note:
                 "> | "
                 + " | ".join(
                     [
-                        _server_time(trade.entry_time),
+                        format_server_time(trade.entry_time),
                         "KUPNO" if trade.direction > 0 else "SPRZEDAŻ",
-                        _amount(trade.entry, signed=False),
-                        _server_time(trade.exit_time),
-                        _amount(trade.exit, signed=False),
+                        format_amount(trade.entry, signed=False),
+                        format_server_time(trade.exit_time),
+                        format_amount(trade.exit, signed=False),
                         {"end": "koniec danych"}.get(trade.reason, trade.reason),
-                        _amount(trade.r_multiple),
-                        f"{_amount(trade.profit)} {currency}",
+                        format_amount(trade.r_multiple),
+                        f"{format_amount(trade.profit)} {currency}",
                     ]
                 )
                 + " |"

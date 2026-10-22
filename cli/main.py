@@ -914,6 +914,88 @@ def mt5_backtest(
         console.print(f"Results note: {path}")
 
 
+@app.command("mt5-optimize")
+def mt5_optimize(
+    symbol: str = typer.Argument("GOLD", help="Exact gold symbol in MT5 Market Watch"),
+    years: float = typer.Option(
+        8.0, "--years", min=2.0, max=10.0, help="Years of history: selection plus check"
+    ),
+    check_years: float = typer.Option(
+        2.0, "--check-years", min=0.5, max=5.0, help="Newest years kept to check the selection"
+    ),
+    timeframes: str = typer.Option(
+        "H1,H4,D1", "--timeframes", help="Comma-separated timeframes: H1, H4, D1"
+    ),
+    risk_percent: float = typer.Option(
+        0.1, "--risk-percent", min=0.01, max=1.0, help="Risk per trade used to show results in %"
+    ),
+    journal: str = typer.Option(
+        None, "--journal", help="Folder for the results note, e.g. the bot's Obsidian journal"
+    ),
+    terminal: str = typer.Option(None, "--terminal", help="Path to terminal64.exe"),
+):
+    """Try every strategy setting on older MT5 history and check the best on the newest years."""
+    from tradingagents.mt5_demo import MT5DemoSession
+    from tradingagents.mt5_optimizer import (
+        check_settings,
+        run_optimizer,
+        summary_numbers,
+        write_optimizer_note,
+    )
+
+    selected = tuple(
+        dict.fromkeys(item.strip().upper() for item in timeframes.split(",") if item.strip())
+    )
+    try:
+        check_settings(selected, years, check_years)
+        console.print(
+            f"Optimizing {symbol} on {', '.join(selected)} over about {years:g} years of MT5 "
+            f"history, checking on the last {check_years:g}..."
+        )
+        with MT5DemoSession(terminal_path=terminal) as session:
+            report = run_optimizer(
+                session,
+                symbol.strip(),
+                years=years,
+                check_years=check_years,
+                timeframes=selected,
+                risk_percent=risk_percent,
+            )
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from None
+
+    numbers = summary_numbers(report)
+
+    def r_value(value):
+        return "n/a" if value is None else f"{value:+.2f} R"
+
+    console.print(
+        f"[bold]{len(report.results)} combinations[/bold] — best in the selection period:"
+    )
+    for rank, result in enumerate(numbers["best"][:10], start=1):
+        console.print(
+            f"{rank}. {result.variant} · {result.timeframe} · SL {result.stop_atr:g}×ATR · "
+            f"TP {result.take_profit_r:g}R: selection {r_value(result.selection['average_r'])} "
+            f"({result.selection['trades']}), check {r_value(result.check['average_r'])} "
+            f"({result.check['trades']})"
+        )
+    console.print(
+        f"Check-period average per trade: selection winners {r_value(numbers['best_check_r'])}, "
+        f"all combinations {r_value(numbers['all_check_r'])}; {numbers['best_positive']} of "
+        f"{numbers['best_checked']} winners also profit on the newer data."
+    )
+    for problem in report.skipped:
+        console.print(f"[yellow]Skipped {problem}[/yellow]")
+    if journal:
+        try:
+            path = write_optimizer_note(report, journal)
+        except OSError as exc:
+            console.print(f"[red]Could not write the results note: {exc}[/red]")
+            raise typer.Exit(code=1) from None
+        console.print(f"Results note: {path}")
+
+
 @app.command("mt5-demo-report")
 def mt5_demo_report(
     state: str = typer.Option(

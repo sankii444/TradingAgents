@@ -368,6 +368,24 @@ its rating, and the agents would need one language-model analysis per bar. Lot
 rounding, the 0.1-lot cap, swaps and commissions are not modelled, and past
 results do not predict future ones.
 
+To search settings instead of trusting one set, run the optimizer:
+
+```powershell
+tradingagents mt5-optimize GOLD --years 8 --check-years 2 --journal "D:\Notes\Bot MT5"
+```
+
+It trades 19 variants: the strategies with other parameters (EMA 10/30, 20/50
+and 50/200; RSI 7 or 14 with 30/70 or 20/80 bands; 20, 55 and 100-bar
+breakouts; gold-silver z-scores of 1.5, 2 and 2.5; 21 and 63-day commodity
+momentum) and combinations (two or three of the bot's five strategies agreeing,
+a breakout or RSI signal only in the EMA 50/200 trend, both daily strategies
+agreeing). Each runs on H1, H4 and D1 with stops of 1.5, 2 or 3 ATRs and targets
+of 1R, 2R or 3R, by the backtest's rules. The ranking uses only the older years;
+the "Backtest GOLD optymalizacja" note then shows how the winners did on the
+newest two years, which the ranking never saw. With hundreds of combinations
+some look good by chance, so only that second period counts as evidence. Swaps,
+which matter for positions held for days, are not modelled.
+
 Review the locally recorded analysis signals and order statuses with:
 
 ```powershell

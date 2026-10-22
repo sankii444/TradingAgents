@@ -63,6 +63,25 @@ def test_long_buys_at_the_ask_and_takes_profit_at_two_r():
 
 
 @pytest.mark.unit
+def test_stop_and_target_distances_follow_the_chosen_multiples():
+    bars = _bars([(100, 100.5, 99.5, 100), (100, 101, 99.5, 100.5), (101, 104.5, 100.8, 104)])
+
+    [trade] = simulate(
+        bars,
+        lambda i: "Buy" if i == 0 else "Hold",
+        lambda _i: 1.0,
+        capital=10_000.0,
+        risk_percent=1.0,
+        start=0,
+        stop_atr=1.5,
+        take_profit_r=3.0,
+    )
+
+    assert (trade.stop, trade.take_profit) == (pytest.approx(98.6), pytest.approx(104.6))
+    assert trade.reason == "end"
+
+
+@pytest.mark.unit
 def test_short_stopped_by_a_gap_fills_at_the_ask_open():
     bars = _bars([(100, 100.5, 99.5, 100), (100, 100.5, 99.6, 100.2), (103, 103.5, 102.8, 103)])
 
