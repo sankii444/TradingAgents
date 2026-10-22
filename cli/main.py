@@ -616,6 +616,18 @@ def mt5_demo_run(
     ),
     timeframe: str = typer.Option("H1", "--timeframe", help="Closed MT5 bar: M15, H1, H4, or D1"),
     run_at: str = typer.Option("09:00", "--run-at", help="Daily local time in HH:MM"),
+    every_hour: bool = typer.Option(
+        False,
+        "--every-hour",
+        help="Run an immediate cycle, then repeat at the start of every local hour",
+    ),
+    duration_days: int | None = typer.Option(
+        None,
+        "--duration-days",
+        min=1,
+        max=365,
+        help="Stop the runner after this many days",
+    ),
     risk_percent: float = typer.Option(
         0.25,
         "--risk-percent",
@@ -642,7 +654,7 @@ def mt5_demo_run(
     terminal: str = typer.Option(None, "--terminal", help="Path to terminal64.exe"),
     state: str = typer.Option(None, "--state", help="SQLite idempotency log path"),
 ):
-    """Run daily MT5 analysis cycles; live accounts are always rejected."""
+    """Run scheduled MT5 analysis cycles; live accounts are always rejected."""
     from tradingagents.mt5_demo import TIMEFRAMES, parse_mt5_strategies
 
     try:
@@ -674,46 +686,72 @@ def mt5_demo_run(
         raise typer.Exit(code=1) from None
 
     state_path = Path(state or Path(DEFAULT_CONFIG["results_dir"]) / "paper" / "mt5-demo.sqlite3")
+    schedule_description = "every hour" if every_hour else f"daily at {run_at}"
+    if duration_days is not None:
+        schedule_description += f" for {duration_days} days"
     console.print(
         f"[bold]MT5 demo bot started[/bold] — {', '.join(selected_symbols)} · "
-        f"{', '.join(selected_strategies)} · {timeframe.upper()} · daily at {run_at}"
+        f"{', '.join(selected_strategies)} · {timeframe.upper()} · {schedule_description}"
     )
     console.print("[dim]No orders without --execute-demo; live accounts are always rejected.[/dim]")
+    deadline = (
+        time.monotonic() + duration_days * 24 * 60 * 60 if duration_days is not None else None
+    )
+
+    def run_cycles():
+        for symbol, analysis_symbol in zip(
+            selected_symbols, selected_analysis_symbols, strict=True
+        ):
+            for selected_strategy in selected_strategies:
+                try:
+                    _run_mt5_demo_cycle(
+                        symbol,
+                        selected_strategy,
+                        timeframe.upper(),
+                        risk_percent,
+                        max_lot,
+                        execute_demo,
+                        state_path,
+                        analysis_symbol=analysis_symbol,
+                        analysis_exchange=analysis_exchange,
+                        terminal_path=terminal,
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[red]MT5 demo cycle failed for {symbol} "
+                        f"({selected_strategy}): {exc}[/red]"
+                    )
+
     try:
+        if every_hour:
+            run_cycles()
         while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                console.print("[yellow]MT5 demo test duration completed.[/yellow]")
+                break
             now = datetime.now()
-            next_run = now.replace(
-                hour=scheduled_time.hour,
-                minute=scheduled_time.minute,
-                second=0,
-                microsecond=0,
-            )
-            if next_run <= now:
-                next_run += timedelta(days=1)
+            if every_hour:
+                next_run = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            else:
+                next_run = now.replace(
+                    hour=scheduled_time.hour,
+                    minute=scheduled_time.minute,
+                    second=0,
+                    microsecond=0,
+                )
+                if next_run <= now:
+                    next_run += timedelta(days=1)
             console.print(f"Next MT5 cycle: {next_run:%Y-%m-%d %H:%M}")
-            time.sleep(max(0, (next_run - now).total_seconds()))
-            for symbol, analysis_symbol in zip(
-                selected_symbols, selected_analysis_symbols, strict=True
-            ):
-                for selected_strategy in selected_strategies:
-                    try:
-                        _run_mt5_demo_cycle(
-                            symbol,
-                            selected_strategy,
-                            timeframe.upper(),
-                            risk_percent,
-                            max_lot,
-                            execute_demo,
-                            state_path,
-                            analysis_symbol=analysis_symbol,
-                            analysis_exchange=analysis_exchange,
-                            terminal_path=terminal,
-                        )
-                    except Exception as exc:
-                        console.print(
-                            f"[red]MT5 demo cycle failed for {symbol} "
-                            f"({selected_strategy}): {exc}[/red]"
-                        )
+            sleep_seconds = max(0, (next_run - now).total_seconds())
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= sleep_seconds:
+                    time.sleep(max(0, remaining))
+                    console.print("[yellow]MT5 demo test duration completed.[/yellow]")
+                    break
+            time.sleep(sleep_seconds)
+            if deadline is None or time.monotonic() < deadline:
+                run_cycles()
     except KeyboardInterrupt:
         console.print("\n[yellow]MT5 demo bot stopped.[/yellow]")
 

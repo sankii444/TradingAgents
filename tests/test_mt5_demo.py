@@ -378,6 +378,48 @@ def test_demo_runner_refuses_multiple_live_demo_strategies():
 
 
 @pytest.mark.unit
+def test_demo_runner_can_compare_all_signals_hourly_for_limited_duration(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    import cli.main as cli_main
+
+    cycles = []
+
+    def stop_after_first_run(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        cli_main, "_run_mt5_demo_cycle", lambda *args, **kwargs: cycles.append(args)
+    )
+    monkeypatch.setattr(cli_main.time, "sleep", stop_after_first_run)
+
+    result = CliRunner().invoke(
+        cli_main.app,
+        [
+            "mt5-demo-run",
+            "GOLD",
+            "--strategies",
+            "trend,mean-reversion,breakout,tradingview",
+            "--timeframe",
+            "H1",
+            "--risk-percent",
+            "0.1",
+            "--every-hour",
+            "--duration-days",
+            "30",
+            "--state",
+            str(tmp_path / "mt5.sqlite3"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "every hour for 30 days" in result.output
+    assert len(cycles) == 4
+    assert all(call[0] == "GOLD" and call[2] == "H1" for call in cycles)
+    assert all(call[3] == 0.1 and call[5] is False for call in cycles)
+
+
+@pytest.mark.unit
 def test_tradingview_analysis_maps_rating_and_uses_configured_symbol_exchange():
     requests = []
 

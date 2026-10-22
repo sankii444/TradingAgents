@@ -309,6 +309,17 @@ For daily automation, keep the process running:
 tradingagents mt5-demo-run GOLD.a,EURUSD.a --strategies tradingview --analysis-symbols XAUUSD,EURUSD --run-at 09:00 --execute-demo
 ```
 
+To compare technical strategies on every hourly candle for a bounded 30-day
+signal-only test (no orders are sent), run:
+
+```powershell
+tradingagents mt5-demo-run GOLD --strategies trend,mean-reversion,breakout,tradingview --timeframe H1 --risk-percent 0.1 --every-hour --duration-days 30
+```
+
+Hourly mode analyzes once immediately, then at the start of each local hour.
+The `agents` strategy is intentionally omitted here because repeated LLM
+analysis can incur provider charges. Stop the test early with Ctrl+C.
+
 Review the locally recorded analysis signals and order statuses with:
 
 ```powershell
