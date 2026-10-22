@@ -30,7 +30,8 @@ from tradingagents.commodity_strategies import (
     strategy_symbols,
 )
 from tradingagents.forex_paper import STOP_ATR_MULTIPLE
-from tradingagents.mt5_demo import TAKE_PROFIT_R, TIMEFRAMES
+from tradingagents.mt5_demo import TAKE_PROFIT_R, TIMEFRAMES, restrict_signal
+from tradingagents.mt5_journal import SIDE_SETTING_LABELS, SUMMARY_NOTE, write_note
 from tradingagents.paper_strategies import signal_for_strategy
 
 BAR_STRATEGIES = ("trend", "mean-reversion", "breakout")
@@ -71,6 +72,7 @@ class BacktestReport:
     risk_percent: float
     buy_and_hold: float
     trades: dict[str, list[Trade]]
+    side: str = "both"
 
 
 def check_strategies(strategies: list[str]) -> None:
@@ -238,9 +240,14 @@ def run_mt5_backtest(
     years: float,
     risk_percent: float,
     capital: float | None = None,
+    side: str = "both",
 ) -> BacktestReport:
-    """Replay about ``years`` of the session's history through each strategy."""
+    """Replay about ``years`` of the session's history through each strategy.
+
+    ``side`` "long" or "short" keeps only that direction's signals, as the live bot does.
+    """
     check_strategies(strategies)
+    restrict_signal(None, side)  # rejects an unknown side before any history is read
     bars = session.history_bars(
         symbol, timeframe, int(years * BARS_PER_YEAR[timeframe]) + WARMUP_BARS
     )
@@ -262,7 +269,11 @@ def run_mt5_backtest(
         else:
             signal_at = bar_signals(bars, strategy)
         trades[strategy] = simulate(
-            bars, signal_at, atr_at, capital=capital, risk_percent=risk_percent
+            bars,
+            one_side(signal_at, side),
+            atr_at,
+            capital=capital,
+            risk_percent=risk_percent,
         )
     return BacktestReport(
         symbol=symbol,
@@ -275,7 +286,19 @@ def run_mt5_backtest(
         risk_percent=risk_percent,
         buy_and_hold=float(bars["Close"].iloc[-1] / bars["Open"].iloc[WARMUP_BARS] - 1),
         trades=trades,
+        side=side,
     )
+
+
+def one_side(signal_at: Callable[[int], str | None], side: str) -> Callable[[int], str | None]:
+    """The signals a strategy limited to ``side`` acts on (all of them for "both")."""
+    if side == "both":
+        return signal_at
+
+    def restricted(i: int) -> str | None:
+        return restrict_signal(signal_at(i), side)
+
+    return restricted
 
 
 def summarize(trades: list[Trade], capital: float) -> dict:
@@ -363,7 +386,8 @@ def render_backtest_note(report: BacktestReport, *, now: datetime, summary_note:
         "  - bot-mt5",
         "  - backtest",
         "---",
-        f"# Backtest {report.symbol} · {report.timeframe}",
+        f"# Backtest {report.symbol} · {report.timeframe}"
+        + ("" if report.side == "both" else f" · {SIDE_SETTING_LABELS[report.side]}"),
         "",
         f"> Generowane przez `tradingagents mt5-backtest` {now:%d.%m.%Y %H:%M}; "
         "kolejne uruchomienie nadpisze tę notatkę.",
@@ -374,6 +398,7 @@ def render_backtest_note(report: BacktestReport, *, now: datetime, summary_note:
         f"({report.bar_count} świec {report.timeframe}, czas serwera brokera)",
         f"- **Kapitał startowy:** {format_amount(report.capital, signed=False)} {currency} · "
         f"**ryzyko:** {risk}% kapitału na transakcję",
+        f"- **Kierunek:** {SIDE_SETTING_LABELS[report.side]}",
         f"- **Złoto w tym okresie (kup i trzymaj, bez dźwigni):** {format_percent(report.buy_and_hold)}",
         "",
         "## Wyniki",
@@ -451,10 +476,9 @@ def render_backtest_note(report: BacktestReport, *, now: datetime, summary_note:
 def write_backtest_note(
     report: BacktestReport, journal_dir: str | Path, *, now: datetime | None = None
 ) -> Path:
-    """Write the report as "Backtest <symbol> <timeframe>.md" next to the signal journal."""
-    from tradingagents.mt5_journal import SUMMARY_NOTE, write_note
-
-    path = Path(journal_dir) / f"Backtest {report.symbol} {report.timeframe}.md"
+    """Write "Backtest <symbol> <timeframe>[ <side>].md" next to the signal journal."""
+    suffix = "" if report.side == "both" else f" {SIDE_SETTING_LABELS[report.side]}"
+    path = Path(journal_dir) / f"Backtest {report.symbol} {report.timeframe}{suffix}.md"
     write_note(
         path, render_backtest_note(report, now=now or datetime.now(), summary_note=SUMMARY_NOTE)
     )

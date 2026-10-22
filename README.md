@@ -341,6 +341,12 @@ Both read daily bars, so in an hourly test their signal changes at most once a
 day. The windows and the threshold are choices within the papers' ranges, and
 the papers' portfolio results do not carry over to a single gold position.
 
+To trade one direction only, add `--side long` (buy signals only) or
+`--side short` (sell signals only) to `mt5-demo-cycle` or `mt5-demo-run`; the
+default `both` takes either. A signal in the other direction is treated as
+HOLD, and one-sided cycles are logged under their own name, such as
+`trend/short`, so they never mix with the two-sided signals of the same bar.
+
 To keep a readable journal, for example in an Obsidian vault, add
 `--journal "D:\Notes\Bot MT5"` to `mt5-demo-run`. After every round it rewrites
 one Markdown note per day with each candle's close and every strategy's signal,
@@ -366,7 +372,9 @@ latest trades, to a "Backtest GOLD H1" note linked from the journal summary.
 `tradingview` and `agents` cannot be replayed: TradingView keeps no history of
 its rating, and the agents would need one language-model analysis per bar. Lot
 rounding, the 0.1-lot cap, swaps and commissions are not modelled, and past
-results do not predict future ones.
+results do not predict future ones. `--side long` or `--side short` replays one
+direction, like the bot's option, into its own note, e.g. "Backtest GOLD H1
+tylko sprzedaż".
 
 To search settings instead of trusting one set, run the optimizer:
 
@@ -380,11 +388,14 @@ breakouts; gold-silver z-scores of 1.5, 2 and 2.5; 21 and 63-day commodity
 momentum) and combinations (two or three of the bot's five strategies agreeing,
 a breakout or RSI signal only in the EMA 50/200 trend, both daily strategies
 agreeing). Each runs on H1, H4 and D1 with stops of 1.5, 2 or 3 ATRs and targets
-of 1R, 2R or 3R, by the backtest's rules. The ranking uses only the older years;
-the "Backtest GOLD optymalizacja" note then shows how the winners did on the
-newest two years, which the ranking never saw. With hundreds of combinations
-some look good by chance, so only that second period counts as evidence. Swaps,
-which matter for positions held for days, are not modelled.
+of 1R, 2R or 3R, by the backtest's rules, and for both directions, buys only and
+sells only (`--sides both,long,short`, the default). The ranking uses only the
+older years; the "Backtest GOLD optymalizacja" note then shows how the winners
+did on the newest two years, which the ranking never saw, and compares the
+three directions side by side. With thousands of combinations some look good
+by chance, so only that second period counts as evidence. Swaps, which matter
+for positions held for days and differ between buys and sells, are not
+modelled.
 
 Review the locally recorded analysis signals and order statuses with:
 

@@ -237,6 +237,27 @@ def test_backtest_runs_bar_and_daily_strategies_from_one_session():
 
 
 @pytest.mark.unit
+def test_one_sided_backtest_keeps_only_its_direction(tmp_path):
+    def run(side):
+        return run_mt5_backtest(
+            FakeSession(), "GOLD", "H1", ["trend"], years=0.1, risk_percent=0.5, side=side
+        )
+
+    both, long_only, short_only = run("both"), run("long"), run("short")
+
+    assert {trade.direction for trade in both.trades["trend"]} == {1, -1}
+    assert {trade.direction for trade in long_only.trades["trend"]} == {1}
+    assert {trade.direction for trade in short_only.trades["trend"]} == {-1}
+    path = write_backtest_note(short_only, tmp_path / "Bot MT5")
+    assert path.name == "Backtest GOLD H1 tylko sprzedaż.md"
+    text = path.read_text(encoding="utf-8")
+    assert "# Backtest GOLD · H1 · tylko sprzedaż" in text
+    assert "- **Kierunek:** tylko sprzedaż" in text
+    with pytest.raises(ValueError, match="Side must be one of"):
+        run("up")
+
+
+@pytest.mark.unit
 def test_backtest_command_refuses_strategies_without_history():
     from typer.testing import CliRunner
 

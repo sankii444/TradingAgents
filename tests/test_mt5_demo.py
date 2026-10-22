@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from tradingagents.mt5_demo import MT5DemoLedger, MT5DemoSession
+from tradingagents.mt5_demo import MT5DemoLedger, MT5DemoSession, restrict_signal, side_strategy
 from tradingagents.tradingview_analysis import get_tradingview_signal
 
 
@@ -338,6 +338,91 @@ def test_multiple_strategies_log_independent_signals_for_same_bar(tmp_path):
 
 
 @pytest.mark.unit
+def test_side_restriction_turns_the_other_direction_into_hold():
+    assert [restrict_signal(signal, "long") for signal in ("Buy", "Sell", "Underweight")] == [
+        "Buy",
+        "Hold",
+        "Hold",
+    ]
+    assert [restrict_signal(signal, "short") for signal in ("Overweight", "Sell", "REVIEW")] == [
+        "Hold",
+        "Sell",
+        "REVIEW",
+    ]
+    assert restrict_signal("Sell", "both") == "Sell"
+    assert (side_strategy("trend", "both"), side_strategy("trend", "short")) == (
+        "trend",
+        "trend/short",
+    )
+    with pytest.raises(ValueError, match="Side must be one of"):
+        restrict_signal("Buy", "up")
+
+
+@pytest.mark.unit
+def test_one_sided_strategy_ignores_the_other_direction_and_is_logged_apart(tmp_path):
+    mt5 = FakeMT5()
+    state = tmp_path / "mt5.sqlite3"
+    with MT5DemoSession(mt5_module=mt5) as session:
+        market = session.market_data("XAUUSD")
+        long_only = session.evaluate_signal(
+            market, "Sell", strategy="trend", execute=True, state_path=state, side="long"
+        )
+        both = session.evaluate_signal(market, "Sell", strategy="trend", state_path=state)
+        short_only = session.evaluate_signal(
+            market, "Sell", strategy="trend", execute=True, state_path=state, side="short"
+        )
+
+    assert (long_only.action, long_only.signal) == ("no order (Hold/REVIEW)", "Hold")
+    assert both.action == "signal only; no order sent"
+    assert short_only.action == "demo order accepted"
+    assert [request["type"] for request in mt5.sent_requests] == [mt5.ORDER_TYPE_SELL]
+    ledger = MT5DemoLedger(state)
+    try:
+        logged = {
+            strategy: ledger.get_cycle("XAUUSD", "H1", market.bar_time, strategy)["signal"]
+            for strategy in ("trend", "trend/long", "trend/short")
+        }
+    finally:
+        ledger.close()
+    assert logged == {"trend": "Sell", "trend/long": "Hold", "trend/short": "Sell"}
+
+
+@pytest.mark.unit
+def test_demo_cycle_command_shows_what_a_one_sided_strategy_acts_on(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    import cli.main as cli_main
+    import tradingagents.mt5_demo as mt5_demo
+
+    mt5 = FakeMT5()
+    monkeypatch.setattr(
+        mt5_demo, "MT5DemoSession", lambda **_kwargs: MT5DemoSession(mt5_module=mt5)
+    )
+    monkeypatch.setattr(cli_main, "_mt5_signal", lambda *_args, **_kwargs: ("Sell", {}))
+
+    result = CliRunner().invoke(
+        cli_main.app,
+        [
+            "mt5-demo-cycle",
+            "XAUUSD",
+            "--strategy",
+            "trend",
+            "--side",
+            "long",
+            "--state",
+            str(tmp_path / "mt5.sqlite3"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = " ".join(result.output.split())
+    assert "Analysis signal: Sell" in output
+    assert "Side long only: acting on Hold" in output
+    assert "Action: no order (Hold/REVIEW)" in output
+    assert mt5.sent_requests == []
+
+
+@pytest.mark.unit
 def test_daily_entry_limit_applies_after_a_filled_cycle(tmp_path):
     mt5 = FakeMT5()
     state = tmp_path / "mt5.sqlite3"
@@ -484,6 +569,36 @@ def test_runner_retries_cycles_that_failed_for_a_passing_reason(monkeypatch, tmp
     assert result.exit_code == 0, result.output
     assert calls == ["trend", "breakout", "gold-silver", "trend"]
     assert "Retrying 1 failed cycle(s) in 2 minutes" in result.output
+
+
+@pytest.mark.unit
+def test_demo_runner_passes_the_side_to_every_cycle(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    import cli.main as cli_main
+
+    sides = []
+
+    def stop_at_the_next_hour(_moment):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        cli_main, "_run_mt5_demo_cycle", lambda *_args, **kwargs: sides.append(kwargs["side"])
+    )
+    monkeypatch.setattr(cli_main, "_sleep_until", stop_at_the_next_hour)
+    arguments = ["mt5-demo-run", "GOLD", "--strategies", "trend,breakout", "--every-hour"]
+
+    result = CliRunner().invoke(
+        cli_main.app,
+        [*arguments, "--side", "short", "--state", str(tmp_path / "mt5.sqlite3")],
+    )
+    rejected = CliRunner().invoke(cli_main.app, [*arguments, "--side", "down"])
+
+    assert result.exit_code == 0, result.output
+    assert "every hour · short only" in " ".join(result.output.split())
+    assert sides == ["short", "short"]
+    assert rejected.exit_code == 1
+    assert "Side must be one of: both, long, short." in rejected.output
 
 
 @pytest.mark.unit

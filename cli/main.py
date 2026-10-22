@@ -482,8 +482,9 @@ def _run_mt5_demo_cycle(
     analysis_symbol: str | None = None,
     analysis_exchange: str | None = None,
     terminal_path: str | None = None,
+    side: str = "both",
 ):
-    from tradingagents.mt5_demo import MT5DemoSession
+    from tradingagents.mt5_demo import MT5DemoSession, restrict_signal
 
     with MT5DemoSession(terminal_path=terminal_path) as session:
         market = session.market_data(symbol, timeframe)
@@ -502,6 +503,7 @@ def _run_mt5_demo_cycle(
             max_lot=max_lot,
             execute=execute_demo,
             state_path=state_path,
+            side=side,
         )
 
     console.print(f"[bold]MT5 demo — {symbol} ({strategy}, {timeframe})[/bold]")
@@ -510,6 +512,8 @@ def _run_mt5_demo_cycle(
         f"{market.snapshot.close:.{5 if market.snapshot.close < 10 else 2}f}"
     )
     console.print(f"Analysis signal: {signal}")
+    if side != "both":
+        console.print(f"Side {side} only: acting on {restrict_signal(signal, side)}")
     console.print(f"Account equity: {market.equity:,.2f} {market.currency}")
     console.print(f"Action: {result.action}")
     if result.volume:
@@ -609,9 +613,12 @@ def mt5_demo_cycle(
         "--state",
         help="SQLite idempotency log (default: results_dir/paper/mt5-demo.sqlite3)",
     ),
+    side: str = typer.Option(
+        "both", "--side", help="Trade both directions, or only long or only short signals"
+    ),
 ):
     """Analyze one closed MT5 bar; order sending is opt-in and demo-only."""
-    from tradingagents.mt5_demo import TIMEFRAMES, parse_mt5_strategies
+    from tradingagents.mt5_demo import SIDES, TIMEFRAMES, parse_mt5_strategies
 
     try:
         selected = parse_mt5_strategies(strategy)
@@ -619,6 +626,8 @@ def mt5_demo_cycle(
             raise ValueError("mt5-demo-cycle accepts exactly one strategy.")
         if timeframe.upper() not in TIMEFRAMES:
             raise ValueError(f"Unsupported timeframe {timeframe!r}; use {', '.join(TIMEFRAMES)}.")
+        if side not in SIDES:
+            raise ValueError(f"Side must be one of: {', '.join(SIDES)}.")
         state_path = Path(
             state or Path(DEFAULT_CONFIG["results_dir"]) / "paper" / "mt5-demo.sqlite3"
         )
@@ -633,6 +642,7 @@ def mt5_demo_cycle(
             analysis_symbol=analysis_symbol,
             analysis_exchange=analysis_exchange,
             terminal_path=terminal,
+            side=side,
         )
     except (ValueError, RuntimeError) as exc:
         console.print(f"[red]{exc}[/red]")
@@ -695,11 +705,19 @@ def mt5_demo_run(
         help="Folder (e.g. in an Obsidian vault) for daily signal notes and a summary, "
         "rewritten after every round",
     ),
+    side: str = typer.Option(
+        "both",
+        "--side",
+        help="Trade both directions, or only long or only short signals; one-sided cycles are "
+        "logged as e.g. trend/short",
+    ),
 ):
     """Run scheduled MT5 analysis cycles; live accounts are always rejected."""
-    from tradingagents.mt5_demo import TIMEFRAMES, parse_mt5_strategies
+    from tradingagents.mt5_demo import SIDES, TIMEFRAMES, parse_mt5_strategies
 
     try:
+        if side not in SIDES:
+            raise ValueError(f"Side must be one of: {', '.join(SIDES)}.")
         selected_symbols = list(
             dict.fromkeys(item.strip() for item in symbols.split(",") if item.strip())
         )
@@ -734,6 +752,7 @@ def mt5_demo_run(
     console.print(
         f"[bold]MT5 demo bot started[/bold] — {', '.join(selected_symbols)} · "
         f"{', '.join(selected_strategies)} · {timeframe.upper()} · {schedule_description}"
+        + ("" if side == "both" else f" · {side} only")
     )
     console.print("[dim]No orders without --execute-demo; live accounts are always rejected.[/dim]")
     # Wall-clock times, so a computer that sleeps does not stretch the schedule.
@@ -755,6 +774,7 @@ def mt5_demo_run(
                     analysis_symbol=analysis_symbol,
                     analysis_exchange=analysis_exchange,
                     terminal_path=terminal,
+                    side=side,
                 )
             except Exception as exc:
                 console.print(
@@ -860,6 +880,9 @@ def mt5_backtest(
         None, "--journal", help="Folder for the results note, e.g. the bot's Obsidian journal"
     ),
     terminal: str = typer.Option(None, "--terminal", help="Path to terminal64.exe"),
+    side: str = typer.Option(
+        "both", "--side", help="Trade both directions, or only long or only short signals"
+    ),
 ):
     """Replay MT5 history through the strategies with the bot's stop, target and spread."""
     from tradingagents.mt5_backtest import (
@@ -868,13 +891,15 @@ def mt5_backtest(
         summarize,
         write_backtest_note,
     )
-    from tradingagents.mt5_demo import TIMEFRAMES, MT5DemoSession, parse_mt5_strategies
+    from tradingagents.mt5_demo import SIDES, TIMEFRAMES, MT5DemoSession, parse_mt5_strategies
 
     try:
         selected = parse_mt5_strategies(strategies)
         check_strategies(selected)
         if timeframe.upper() not in TIMEFRAMES:
             raise ValueError(f"Unsupported timeframe {timeframe!r}; use {', '.join(TIMEFRAMES)}.")
+        if side not in SIDES:
+            raise ValueError(f"Side must be one of: {', '.join(SIDES)}.")
         console.print(
             f"Replaying about {years:g} years of {symbol} {timeframe.upper()} from MT5..."
         )
@@ -887,6 +912,7 @@ def mt5_backtest(
                 years=years,
                 risk_percent=risk_percent,
                 capital=capital,
+                side=side,
             )
     except (ValueError, RuntimeError) as exc:
         console.print(f"[red]{exc}[/red]")
@@ -895,6 +921,7 @@ def mt5_backtest(
     console.print(
         f"[bold]MT5 backtest — {report.symbol} {report.timeframe}[/bold] · {report.bar_count} bars"
         f" · risk {risk_percent:g}% · start {report.capital:,.2f} {report.currency}"
+        + ("" if side == "both" else f" · {side} only")
     )
     for name, trades in report.trades.items():
         result = summarize(trades, report.capital)
@@ -933,12 +960,18 @@ def mt5_optimize(
         None, "--journal", help="Folder for the results note, e.g. the bot's Obsidian journal"
     ),
     terminal: str = typer.Option(None, "--terminal", help="Path to terminal64.exe"),
+    sides: str = typer.Option(
+        "both,long,short",
+        "--sides",
+        help="Comma-separated directions to compare: both, long (buy only), short (sell only)",
+    ),
 ):
     """Try every strategy setting on older MT5 history and check the best on the newest years."""
     from tradingagents.mt5_demo import MT5DemoSession
     from tradingagents.mt5_optimizer import (
         check_settings,
         run_optimizer,
+        side_numbers,
         summary_numbers,
         write_optimizer_note,
     )
@@ -946,11 +979,14 @@ def mt5_optimize(
     selected = tuple(
         dict.fromkeys(item.strip().upper() for item in timeframes.split(",") if item.strip())
     )
+    selected_sides = tuple(
+        dict.fromkeys(item.strip().lower() for item in sides.split(",") if item.strip())
+    )
     try:
-        check_settings(selected, years, check_years)
+        check_settings(selected, years, check_years, selected_sides)
         console.print(
-            f"Optimizing {symbol} on {', '.join(selected)} over about {years:g} years of MT5 "
-            f"history, checking on the last {check_years:g}..."
+            f"Optimizing {symbol} on {', '.join(selected)} ({', '.join(selected_sides)}) over "
+            f"about {years:g} years of MT5 history, checking on the last {check_years:g}..."
         )
         with MT5DemoSession(terminal_path=terminal) as session:
             report = run_optimizer(
@@ -960,6 +996,7 @@ def mt5_optimize(
                 check_years=check_years,
                 timeframes=selected,
                 risk_percent=risk_percent,
+                sides=selected_sides,
             )
     except (ValueError, RuntimeError) as exc:
         console.print(f"[red]{exc}[/red]")
@@ -975,8 +1012,9 @@ def mt5_optimize(
     )
     for rank, result in enumerate(numbers["best"][:10], start=1):
         console.print(
-            f"{rank}. {result.variant} · {result.timeframe} · SL {result.stop_atr:g}×ATR · "
-            f"TP {result.take_profit_r:g}R: selection {r_value(result.selection['average_r'])} "
+            f"{rank}. {result.variant} · {result.side} · {result.timeframe} · "
+            f"SL {result.stop_atr:g}×ATR · TP {result.take_profit_r:g}R: "
+            f"selection {r_value(result.selection['average_r'])} "
             f"({result.selection['trades']}), check {r_value(result.check['average_r'])} "
             f"({result.check['trades']})"
         )
@@ -985,6 +1023,14 @@ def mt5_optimize(
         f"all combinations {r_value(numbers['all_check_r'])}; {numbers['best_positive']} of "
         f"{numbers['best_checked']} winners also profit on the newer data."
     )
+    if len(report.sides) > 1:
+        for side, side_result in side_numbers(report).items():
+            console.print(
+                f"{side}: {side_result['selection_positive']} of {side_result['eligible']} "
+                f"positive in selection; check average {r_value(side_result['all_check_r'])} "
+                f"over all, {r_value(side_result['best_check_r'])} for its "
+                f"{len(side_result['best'])} selection winners."
+            )
     for problem in report.skipped:
         console.print(f"[yellow]Skipped {problem}[/yellow]")
     if journal:

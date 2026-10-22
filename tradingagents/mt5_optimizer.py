@@ -36,7 +36,8 @@ from tradingagents.mt5_backtest import (
     format_server_time,
     simulate,
 )
-from tradingagents.mt5_demo import TIMEFRAMES
+from tradingagents.mt5_demo import SIDES, TIMEFRAMES
+from tradingagents.mt5_journal import SIDE_SETTING_LABELS, SUMMARY_NOTE, write_note
 
 OPTIMIZER_TIMEFRAMES = ("H1", "H4", "D1")
 STOP_MULTIPLES = (1.5, 2.0, 3.0)
@@ -45,13 +46,13 @@ MIN_SELECTION_TRADES = 30
 MIN_CHECK_TRADES = 10
 TOP_VARIANTS = 15
 LABELS = np.array(["Hold", "Buy", "Sell"])  # indexed by direction: 0, 1, -1
-# The live bot's settings, for the reference rows: (variant, timeframe, stop, target).
+# The live bot's settings, for the reference rows: (variant, timeframe, stop, target, side).
 BOT_DEFAULTS = (
-    ("trend 20/50", "H1", 2.0, 2.0),
-    ("mean-reversion RSI14 30/70", "H1", 2.0, 2.0),
-    ("breakout 20", "H1", 2.0, 2.0),
-    ("gold-silver z2", "H1", 2.0, 2.0),
-    ("commodity-momentum 21d", "H1", 2.0, 2.0),
+    ("trend 20/50", "H1", 2.0, 2.0, "both"),
+    ("mean-reversion RSI14 30/70", "H1", 2.0, 2.0, "both"),
+    ("breakout 20", "H1", 2.0, 2.0, "both"),
+    ("gold-silver z2", "H1", 2.0, 2.0, "both"),
+    ("commodity-momentum 21d", "H1", 2.0, 2.0, "both"),
 )
 VARIANT_DESCRIPTIONS = {
     "trend 10/30": "EMA 10 powyżej EMA 30 = BUY, poniżej = SELL",
@@ -88,6 +89,7 @@ class GridResult:
     take_profit_r: float
     selection: dict
     check: dict
+    side: str = "both"
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,16 @@ class OptimizerReport:
     risk_percent: float
     results: list[GridResult]
     skipped: list[str]
+    sides: tuple[str, ...] = ("both",)
+
+
+def keep_side(direction: np.ndarray, side: str) -> np.ndarray:
+    """The directions a strategy limited to ``side`` acts on, like mt5_demo.restrict_signal."""
+    if side == "long":
+        return np.where(direction > 0, direction, 0)
+    if side == "short":
+        return np.where(direction < 0, direction, 0)
+    return direction
 
 
 def _trend(close: pd.Series, fast: int, slow: int) -> np.ndarray:
@@ -272,12 +284,22 @@ def period_stats(r_values: list[float]) -> dict:
     }
 
 
-def check_settings(timeframes: tuple[str, ...], years: float, check_years: float) -> None:
-    """Reject timeframes the optimizer cannot use and a check period that leaves no selection."""
+def check_settings(
+    timeframes: tuple[str, ...],
+    years: float,
+    check_years: float,
+    sides: tuple[str, ...] = ("both",),
+) -> None:
+    """Reject timeframes or sides the optimizer cannot use and a check that leaves no selection."""
     unknown = [timeframe for timeframe in timeframes if timeframe not in OPTIMIZER_TIMEFRAMES]
     if unknown or not timeframes:
         raise ValueError(
             f"Optimize on {', '.join(OPTIMIZER_TIMEFRAMES)}; not on {', '.join(unknown) or 'nothing'}."
+        )
+    unknown = [side for side in sides if side not in SIDES]
+    if unknown or not sides:
+        raise ValueError(
+            f"Sides must be among {', '.join(SIDES)}; not {', '.join(unknown) or 'none'}."
         )
     if not 0 < check_years <= years - 1:
         raise ValueError("Keep at least one year of history for selection before the check years.")
@@ -291,9 +313,10 @@ def run_optimizer(
     check_years: float,
     timeframes: tuple[str, ...] = OPTIMIZER_TIMEFRAMES,
     risk_percent: float = 0.1,
+    sides: tuple[str, ...] = SIDES,
 ) -> OptimizerReport:
-    """Trade every variant, timeframe, stop and target, split at ``check_years`` before the end."""
-    check_settings(timeframes, years, check_years)
+    """Trade every variant, timeframe, stop, target and side; split ``check_years`` before the end."""
+    check_settings(timeframes, years, check_years, sides)
     skipped = []
     daily = {}
     for strategy, window in (
@@ -328,32 +351,34 @@ def run_optimizer(
             bars, timeframe, daily["gold-silver"], daily["commodity-momentum"], symbol
         )
         for name, direction in directions.items():
-            labels = LABELS[direction]
-            for stop in STOP_MULTIPLES:
-                for target in TARGET_MULTIPLES:
-                    trades = simulate(
-                        bars,
-                        labels.__getitem__,
-                        atr.__getitem__,
-                        capital=1.0,
-                        risk_percent=1.0,
-                        stop_atr=stop,
-                        take_profit_r=target,
-                    )
-                    results.append(
-                        GridResult(
-                            name,
-                            timeframe,
-                            stop,
-                            target,
-                            period_stats(
-                                [t.r_multiple for t in trades if t.entry_time < split_time]
-                            ),
-                            period_stats(
-                                [t.r_multiple for t in trades if t.entry_time >= split_time]
-                            ),
+            for side in sides:
+                labels = LABELS[keep_side(direction, side)]
+                for stop in STOP_MULTIPLES:
+                    for target in TARGET_MULTIPLES:
+                        trades = simulate(
+                            bars,
+                            labels.__getitem__,
+                            atr.__getitem__,
+                            capital=1.0,
+                            risk_percent=1.0,
+                            stop_atr=stop,
+                            take_profit_r=target,
                         )
-                    )
+                        results.append(
+                            GridResult(
+                                variant=name,
+                                timeframe=timeframe,
+                                stop_atr=stop,
+                                take_profit_r=target,
+                                selection=period_stats(
+                                    [t.r_multiple for t in trades if t.entry_time < split_time]
+                                ),
+                                check=period_stats(
+                                    [t.r_multiple for t in trades if t.entry_time >= split_time]
+                                ),
+                                side=side,
+                            )
+                        )
     if not results:
         raise ValueError("MT5 returned too little history to optimize; " + "; ".join(skipped))
     return OptimizerReport(
@@ -365,12 +390,13 @@ def run_optimizer(
         risk_percent=risk_percent,
         results=results,
         skipped=skipped,
+        sides=tuple(sides),
     )
 
 
-def ranked(report: OptimizerReport) -> list[GridResult]:
+def ranked(results: list[GridResult]) -> list[GridResult]:
     """Combinations with enough selection trades, best average R in the selection period first."""
-    eligible = [r for r in report.results if r.selection["trades"] >= MIN_SELECTION_TRADES]
+    eligible = [r for r in results if r.selection["trades"] >= MIN_SELECTION_TRADES]
     return sorted(
         eligible,
         key=lambda r: (r.selection["average_r"], r.selection["total_r"]),
@@ -393,6 +419,7 @@ def _cells(result: GridResult, risk_percent: float) -> list[str]:
     selection, check = result.selection, result.check
     return [
         result.variant,
+        SIDE_SETTING_LABELS[result.side],
         result.timeframe,
         f"{format_amount(result.stop_atr, signed=False, digits=1)}×ATR / "
         f"{format_amount(result.take_profit_r, signed=False, digits=0)}R",
@@ -405,23 +432,62 @@ def _cells(result: GridResult, risk_percent: float) -> list[str]:
     ]
 
 
-def summary_numbers(report: OptimizerReport) -> dict:
-    """How the selection winners did in the check period, against every combination."""
-    best = ranked(report)[:TOP_VARIANTS]
+def subset_numbers(results: list[GridResult]) -> dict:
+    """How the selection winners of ``results`` did in the check period, against all of them."""
+    eligible = [r for r in results if r.selection["trades"] >= MIN_SELECTION_TRADES]
+    best = ranked(results)[:TOP_VARIANTS]
     checked_best = [r for r in best if r.check["trades"] >= MIN_CHECK_TRADES]
-    checked_all = [r for r in report.results if r.check["trades"] >= MIN_CHECK_TRADES]
+    checked_all = [r for r in results if r.check["trades"] >= MIN_CHECK_TRADES]
 
-    def mean_r(results: list[GridResult]) -> float | None:
-        values = [r.check["average_r"] for r in results]
+    def mean_r(chosen: list[GridResult]) -> float | None:
+        values = [r.check["average_r"] for r in chosen]
         return sum(values) / len(values) if values else None
 
     return {
         "best": best,
+        "eligible": len(eligible),
+        "selection_positive": sum(r.selection["average_r"] > 0 for r in eligible),
         "best_check_r": mean_r(checked_best),
         "all_check_r": mean_r(checked_all),
+        "all_positive": sum(r.check["average_r"] > 0 for r in checked_all),
+        "all_checked": len(checked_all),
         "best_positive": sum(r.check["average_r"] > 0 for r in checked_best),
         "best_checked": len(checked_best),
     }
+
+
+def summary_numbers(report: OptimizerReport) -> dict:
+    """The selection winners over every side against every combination."""
+    return subset_numbers(report.results)
+
+
+def side_numbers(report: OptimizerReport) -> dict[str, dict]:
+    """subset_numbers() for each side the report traded."""
+    return {
+        side: subset_numbers([r for r in report.results if r.side == side]) for side in report.sides
+    }
+
+
+def _comparison_row(side: str, numbers: dict) -> str:
+    best = numbers["best"][0] if numbers["best"] else None
+    winner = (
+        f"{best.variant}, {best.timeframe}, "
+        f"{format_amount(best.stop_atr, signed=False, digits=1)}×ATR / "
+        f"{format_amount(best.take_profit_r, signed=False, digits=0)}R: "
+        f"{_r(best.selection['average_r'])} → {_r(best.check['average_r'])}"
+        if best
+        else "—"
+    )
+    cells = [
+        SIDE_SETTING_LABELS[side],
+        f"{numbers['selection_positive']} z {numbers['eligible']}",
+        _r(numbers["all_check_r"]),
+        f"{numbers['all_positive']} z {numbers['all_checked']}",
+        f"{_r(numbers['best_check_r'])} ({numbers['best_positive']} z "
+        f"{numbers['best_checked']} na plusie)",
+        winner,
+    ]
+    return "| " + " | ".join(cells) + " |"
 
 
 def render_optimizer_note(
@@ -433,6 +499,7 @@ def render_optimizer_note(
     risk = f"{report.risk_percent:g}".replace(".", ",")
     header = [
         "Wariant",
+        "Kierunek",
         "Interwał",
         "SL / TP",
         "Dobór: śr. R (transakcje)",
@@ -453,9 +520,37 @@ def render_optimizer_note(
         ]
         return ["| " + " | ".join(columns) + " |", "|" + " --- |" * len(columns), *rows]
 
-    by_key = {(r.variant, r.timeframe, r.stop_atr, r.take_profit_r): r for r in report.results}
+    by_key = {
+        (r.variant, r.timeframe, r.stop_atr, r.take_profit_r, r.side): r for r in report.results
+    }
     defaults = [by_key[key] for key in BOT_DEFAULTS if key in by_key]
     best_r, all_r = numbers["best_check_r"], numbers["all_check_r"]
+    comparison, per_side_tables = [], []
+    if len(report.sides) > 1:
+        per_side = side_numbers(report)
+        comparison = [
+            "## Porównanie kierunków",
+            "",
+            "Każdy kierunek to ta sama siatka; „na plusie” to kombinacje ze średnim R powyżej "
+            "zera, a średnie R w sprawdzeniu liczę ze wszystkich kombinacji kierunku.",
+            "",
+            f"| Kierunek | Dobór: na plusie (min. {MIN_SELECTION_TRADES} transakcji) "
+            "| Sprawdzenie: śr. R na transakcję "
+            f"| Sprawdzenie: na plusie (min. {MIN_CHECK_TRADES} transakcji) "
+            f"| {TOP_VARIANTS} najlepszych z doboru w sprawdzeniu "
+            "| Najlepsza w doborze (dobór → sprawdzenie) |",
+            "|" + " --- |" * 6,
+            *(_comparison_row(side, per_side[side]) for side in report.sides),
+            "",
+        ]
+        per_side_tables = ["## Najlepsze dla każdego kierunku", ""]
+        for side in report.sides:
+            per_side_tables += [
+                f"### {SIDE_SETTING_LABELS[side].capitalize()}",
+                "",
+                *table(per_side[side]["best"][:5], numbered=True),
+                "",
+            ]
     lines = [
         "---",
         "tags:",
@@ -475,10 +570,12 @@ def render_optimizer_note(
         f"{format_server_time(report.last_time, '%d.%m.%Y')}: nowsze dane, których wybór nie "
         "widział.",
         f"- **Siatka:** {len(variants)} wariantów × interwały {', '.join(report.timeframes)} × "
-        "stop 1,5 / 2 / 3×ATR × take profit 1R / 2R / 3R = "
+        "stop 1,5 / 2 / 3×ATR × take profit 1R / 2R / 3R × kierunki "
+        f"({' / '.join(SIDE_SETTING_LABELS[side] for side in report.sides)}) = "
         f"{len(report.results)} kombinacji.",
         f"- **Wynik w %** to suma R razy ryzyko {risk}% kapitału na transakcję.",
         "",
+        *comparison,
         f"## {TOP_VARIANTS} najlepszych w okresie doboru i ich wynik na nowych danych",
         "",
         f"Ranking według średniego R na transakcję w okresie doboru (co najmniej "
@@ -489,6 +586,7 @@ def render_optimizer_note(
         f"Ocena: ✅ zarabia także w okresie sprawdzenia, ❌ traci, ⚪ mniej niż {MIN_CHECK_TRADES} "
         "transakcji.",
         "",
+        *per_side_tables,
         "## Czy dobór coś daje?",
         "",
         f"- Średnie R na transakcję w okresie sprawdzenia: najlepsze z doboru {_r(best_r)}, "
@@ -498,9 +596,13 @@ def render_optimizer_note(
         "- Jeśli najlepsze z doboru nie wypadają w sprawdzeniu lepiej niż przeciętna kombinacja, "
         "ich wynik w doborze był głównie przypadkiem.",
         "",
-        "## Obecne ustawienia bota (H1, SL 2×ATR, TP 2R)",
+        "## Obecne ustawienia bota (H1, SL 2×ATR, TP 2R, oba kierunki)",
         "",
-        *table(defaults, numbered=False),
+        *(
+            table(defaults, numbered=False)
+            if defaults
+            else ["Ta siatka ich nie obejmuje (potrzebny interwał H1 i oba kierunki)."]
+        ),
         "",
         "## Warianty",
         "",
@@ -511,9 +613,12 @@ def render_optimizer_note(
         "- Każda kombinacja handluje osobno, jak w backteście: wejście po otwarciu następnej "
         "świecy, spread z MT5, pozycję zamyka tylko SL albo TP, jedna pozycja naraz, najwyżej "
         "jedno wejście dziennie.",
-        "- Z setek kombinacji część wygląda dobrze przypadkiem; dowodem jest dopiero okres "
-        "sprawdzenia, a i tam liczba transakcji bywa mała.",
-        "- Bez swapów i prowizji; przy pozycjach trzymanych dniami (H4, D1) swap może zjeść wynik.",
+        "- „Tylko kupno” i „tylko sprzedaż” traktują sygnały w drugą stronę jak HOLD, tak jak "
+        "opcja --side bota.",
+        f"- Z {len(report.results)} kombinacji część wygląda dobrze przypadkiem; dowodem jest "
+        "dopiero okres sprawdzenia, a i tam liczba transakcji bywa mała.",
+        "- Bez swapów i prowizji; przy pozycjach trzymanych dniami (H4, D1) swap może zjeść wynik, "
+        "a dla kupna i sprzedaży jest różny.",
         "- TradingView i agents nie mają historii do odtworzenia, więc ich tu nie ma.",
         "- Wyniki z przeszłości nie gwarantują przyszłych; to test, nie porada inwestycyjna.",
     ]
@@ -526,8 +631,6 @@ def write_optimizer_note(
     report: OptimizerReport, journal_dir: str | Path, *, now: datetime | None = None
 ) -> Path:
     """Write "Backtest <symbol> optymalizacja.md", which the journal summary links."""
-    from tradingagents.mt5_journal import SUMMARY_NOTE, write_note
-
     path = Path(journal_dir) / f"Backtest {report.symbol} optymalizacja.md"
     write_note(
         path,

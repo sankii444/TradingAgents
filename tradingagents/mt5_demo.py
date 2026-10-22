@@ -38,6 +38,25 @@ MT5_STRATEGIES = (
 )
 
 
+SIDES = ("both", "long", "short")
+
+
+def restrict_signal(signal: str | None, side: str) -> str | None:
+    """The signal a strategy limited to one side acts on: the other direction becomes Hold."""
+    if side not in SIDES:
+        raise ValueError(f"Side must be one of: {', '.join(SIDES)}.")
+    if (side == "long" and signal in ("Sell", "Underweight")) or (
+        side == "short" and signal in ("Buy", "Overweight")
+    ):
+        return "Hold"
+    return signal
+
+
+def side_strategy(strategy: str, side: str) -> str:
+    """The name a side-limited strategy is logged under, so its cycles never mix with both."""
+    return strategy if side == "both" else f"{strategy}/{side}"
+
+
 def parse_mt5_strategies(value: str) -> list[str]:
     strategies = [item.strip().lower() for item in value.split(",") if item.strip()]
     unknown = [item for item in strategies if item not in MT5_STRATEGIES]
@@ -299,6 +318,7 @@ class MT5DemoSession:
         execute: bool = False,
         state_path: str | Path = "mt5-demo.sqlite3",
         magic: int = 20711020,
+        side: str = "both",
     ) -> MT5TradeResult:
         terminal, account = self._require_demo_account()
         if execute and (not terminal.trade_allowed or not account.trade_allowed):
@@ -307,6 +327,9 @@ class MT5DemoSession:
             raise ValueError(f"Unsupported strategy signal: {signal!r}.")
         if strategy not in MT5_STRATEGIES:
             raise ValueError(f"Unsupported MT5 demo strategy: {strategy!r}.")
+        # From here on a one-sided strategy only sees its own direction and is logged apart.
+        signal = restrict_signal(signal, side)
+        strategy = side_strategy(strategy, side)
         if not math.isfinite(risk_percent) or not 0 < risk_percent <= MAX_RISK_PERCENT:
             raise ValueError(f"Risk must be greater than 0 and at most {MAX_RISK_PERCENT}%.")
         if not math.isfinite(max_lot) or not 0 < max_lot <= MAX_LOT:

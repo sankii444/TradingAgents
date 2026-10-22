@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 import numpy as np
@@ -12,9 +13,11 @@ from tradingagents.mt5_optimizer import (
     commodity_momentum_daily,
     consensus,
     gold_silver_daily,
+    keep_side,
     period_stats,
     render_optimizer_note,
     run_optimizer,
+    side_numbers,
     summary_numbers,
     variant_directions,
     write_optimizer_note,
@@ -101,6 +104,15 @@ def test_combinations_need_agreement():
 
 
 @pytest.mark.unit
+def test_one_side_keeps_only_its_direction():
+    direction = np.array([1, -1, 0, -1, 1])
+
+    assert keep_side(direction, "both").tolist() == [1, -1, 0, -1, 1]
+    assert keep_side(direction, "long").tolist() == [1, 0, 0, 0, 1]
+    assert keep_side(direction, "short").tolist() == [0, -1, 0, -1, 0]
+
+
+@pytest.mark.unit
 def test_period_stats_measure_expectancy_and_drawdown():
     stats = period_stats([2.0, -1.0, -1.0, 3.0])
 
@@ -132,12 +144,18 @@ class FakeSession:
 @pytest.mark.unit
 def test_optimizer_ranks_on_the_selection_period_and_checks_on_the_newest(tmp_path):
     report = run_optimizer(
-        FakeSession(), "GOLD", years=3, check_years=1, timeframes=("H4", "D1"), risk_percent=0.1
+        FakeSession(),
+        "GOLD",
+        years=3,
+        check_years=1,
+        timeframes=("H4", "D1"),
+        risk_percent=0.1,
+        sides=("both", "short"),
     )
 
     variants = {result.variant for result in report.results}
     assert len(variants) == 19
-    assert len(report.results) == 19 * 2 * 9
+    assert len(report.results) == 19 * 2 * 9 * 2
     assert report.first_time < report.split_time < report.last_time
     assert any(result.check["trades"] for result in report.results)
     numbers = summary_numbers(report)
@@ -145,6 +163,10 @@ def test_optimizer_ranks_on_the_selection_period_and_checks_on_the_newest(tmp_pa
     assert all(r.selection["trades"] >= 30 for r in numbers["best"])
     ranks = [r.selection["average_r"] for r in numbers["best"]]
     assert ranks == sorted(ranks, reverse=True)
+    per_side = side_numbers(report)
+    assert list(per_side) == ["both", "short"]
+    assert all(r.side == "short" for r in per_side["short"]["best"])
+    assert per_side["both"]["eligible"] + per_side["short"]["eligible"] == numbers["eligible"]
 
     text = render_optimizer_note(
         report,
@@ -153,10 +175,44 @@ def test_optimizer_ranks_on_the_selection_period_and_checks_on_the_newest(tmp_pa
         backtest_note="Backtest GOLD H1",
     )
     assert "## 15 najlepszych w okresie doboru i ich wynik na nowych danych" in text
-    assert "## Obecne ustawienia bota (H1, SL 2×ATR, TP 2R)" in text
-    assert "= 342 kombinacji" in text
+    assert "× kierunki (oba kierunki / tylko sprzedaż) = 684 kombinacji" in text
+    assert "## Porównanie kierunków" in text
+    assert text.count("\n| oba kierunki | ") == 1
+    assert text.count("\n| tylko sprzedaż | ") == 1
+    assert "### Oba kierunki" in text and "### Tylko sprzedaż" in text
+    assert "| # | Wariant | Kierunek | Interwał | SL / TP |" in text
+    assert "Ta siatka ich nie obejmuje (potrzebny interwał H1 i oba kierunki)." in text
     path = write_optimizer_note(report, tmp_path / "Bot MT5")
     assert path.name == "Backtest GOLD optymalizacja.md"
+
+
+@pytest.mark.unit
+def test_optimizer_note_shows_the_bot_settings_for_a_single_side():
+    report = run_optimizer(
+        FakeSession(), "GOLD", years=3, check_years=1, timeframes=("D1",), sides=("both",)
+    )
+    # The fake session has no H1 bars, so stand one D1 result in for the bot's H1 setting.
+    report.results.append(
+        replace(
+            report.results[0],
+            variant="trend 20/50",
+            stop_atr=2.0,
+            take_profit_r=2.0,
+            timeframe="H1",
+        )
+    )
+
+    text = render_optimizer_note(
+        report,
+        now=datetime(2026, 10, 22, 16, 0),
+        summary_note="Podsumowanie bota",
+        backtest_note="Backtest GOLD H1",
+    )
+
+    assert "## Porównanie kierunków" not in text
+    assert "× kierunki (oba kierunki) =" in text
+    defaults = text.split("## Obecne ustawienia bota (H1, SL 2×ATR, TP 2R, oba kierunki)")[1]
+    assert "| trend 20/50 | oba kierunki | H1 | 2,0×ATR / 2R |" in defaults
 
 
 @pytest.mark.unit
@@ -165,6 +221,7 @@ def test_optimizer_ranks_on_the_selection_period_and_checks_on_the_newest(tmp_pa
     [
         (["--timeframes", "M15"], "not on M15"),
         (["--years", "3", "--check-years", "2.5"], "at least one year"),
+        (["--sides", "both,up"], "not up"),
     ],
 )
 def test_optimize_command_rejects_unusable_settings(arguments, message):

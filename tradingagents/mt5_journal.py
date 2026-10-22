@@ -42,6 +42,8 @@ STRATEGY_DESCRIPTIONS = {
     "commodity-momentum": "momentum albo odwrócenie złota zależnie od korelacji surowców; "
     "świece dzienne",
 }
+# Labels for the bot's --side setting, unlike SIDE_LABELS for the signals themselves.
+SIDE_SETTING_LABELS = {"both": "oba kierunki", "long": "tylko kupno", "short": "tylko sprzedaż"}
 SUMMARY_HEADER = [
     "Strategia",
     "BUY",
@@ -52,6 +54,13 @@ SUMMARY_HEADER = [
     "Trafność",
     "Śr. zmiana w kierunku sygnału",
 ]
+
+
+def describe_strategy(name: str) -> str:
+    """A logged strategy's description; one-sided ones are logged as e.g. trend/short."""
+    base, _, side = name.partition("/")
+    text = STRATEGY_DESCRIPTIONS.get(base, "opis niedostępny")
+    return f"{text}; {SIDE_SETTING_LABELS[side]}" if side in SIDE_SETTING_LABELS else text
 
 
 def _read_log(state_path: Path) -> tuple[list[tuple], dict[tuple[str, str, int], float]]:
@@ -241,10 +250,7 @@ def write_journal(
             "",
             "## Strategie",
             "",
-            *(
-                f"- **{name}**: {STRATEGY_DESCRIPTIONS.get(name, 'opis niedostępny')}"
-                for name in used
-            ),
+            *(f"- **{name}**: {describe_strategy(name)}" for name in used),
             "",
             "## Dni",
             "",

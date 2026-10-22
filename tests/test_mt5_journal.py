@@ -67,6 +67,21 @@ def test_journal_writes_a_note_per_day_and_a_summary(tmp_path):
 
 
 @pytest.mark.unit
+def test_journal_describes_one_sided_strategies(tmp_path):
+    state = tmp_path / "mt5.sqlite3"
+    _log(state, [(FIRST_BAR, 4000.0, {"trend": "Sell", "trend/long": "Hold"})])
+    journal = tmp_path / "Bot MT5"
+
+    write_journal(state, journal, tz=UTC, now=NOW)
+
+    text = (journal / "Podsumowanie bota.md").read_text(encoding="utf-8")
+    assert "- **trend**: EMA 20 powyżej EMA 50 = BUY, poniżej = SELL\n" in text
+    assert "- **trend/long**: EMA 20 powyżej EMA 50 = BUY, poniżej = SELL; tylko kupno" in text
+    day = (journal / "Dziennik" / "Sygnały 2026-10-21.md").read_text(encoding="utf-8")
+    assert "| 22:00 | 4000,00 | 🔴 SELL | ⚪ HOLD | SELL 1 · HOLD 1 | — |" in day
+
+
+@pytest.mark.unit
 def test_journal_leaves_unchanged_notes_alone(tmp_path):
     state = tmp_path / "mt5.sqlite3"
     _log(state, [(FIRST_BAR, 4000.0, {"trend": "Sell"})])
