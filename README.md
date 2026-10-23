@@ -317,6 +317,9 @@ tradingagents mt5-demo-run GOLD --strategies trend,mean-reversion,breakout,tradi
 ```
 
 Hourly mode analyzes once immediately, then at the start of each local hour.
+`--until 2026-11-21` stops the runner at the end of that day instead of after a
+number of days (`--until "2026-11-21 18:00"` at that time), so a test that is
+restarted, for example at every sign-in, keeps the same end.
 The `agents` strategy is intentionally omitted here because repeated LLM
 analysis can incur provider charges. Stop the test early with Ctrl+C. Hours the
 computer spends asleep are skipped; after it wakes, the runner continues within

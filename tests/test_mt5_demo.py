@@ -531,6 +531,67 @@ def test_demo_runner_can_compare_all_signals_hourly_for_limited_duration(monkeyp
 
 
 @pytest.mark.unit
+def test_demo_runner_stops_at_a_fixed_end_time(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    import cli.main as cli_main
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 21, 23, 30)
+
+    rounds, waits = [], []
+    monkeypatch.setattr(cli_main, "datetime", Clock)
+    monkeypatch.setattr(
+        cli_main, "_run_mt5_demo_cycle", lambda *args, **_kwargs: rounds.append(args)
+    )
+    monkeypatch.setattr(cli_main, "_sleep_until", waits.append)
+
+    result = CliRunner().invoke(
+        cli_main.app,
+        [
+            "mt5-demo-run",
+            "GOLD",
+            "--strategies",
+            "trend",
+            "--every-hour",
+            "--until",
+            "2026-11-21",
+            "--state",
+            str(tmp_path / "mt5.sqlite3"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = " ".join(result.output.split())
+    assert "every hour until 2026-11-21 23:59" in output
+    assert "MT5 demo test duration completed." in output
+    assert len(rounds) == 1  # the immediate round; the next hour is past the end
+    assert waits == [datetime(2026, 11, 21, 23, 59)]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["--until", "2000-01-01"], "The end time 2000-01-01 23:59 has already passed."),
+        (["--until", "21.11.2026"], "--until takes YYYY-MM-DD or YYYY-MM-DD HH:MM"),
+        (["--until", "2099-01-01 12:00", "--duration-days", "30"], "not both"),
+    ],
+)
+def test_demo_runner_rejects_unusable_end_times(arguments, message):
+    from typer.testing import CliRunner
+
+    import cli.main as cli_main
+
+    result = CliRunner().invoke(cli_main.app, ["mt5-demo-run", "GOLD", "--every-hour", *arguments])
+
+    assert result.exit_code == 1
+    assert message in " ".join(result.output.split())
+
+
+@pytest.mark.unit
 def test_runner_retries_cycles_that_failed_for_a_passing_reason(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 

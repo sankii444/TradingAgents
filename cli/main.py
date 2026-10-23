@@ -558,6 +558,18 @@ def _sleep_until(moment: datetime) -> None:
         time.sleep(min(remaining, 60))
 
 
+def _parse_until(value: str) -> datetime:
+    """A local end time: "YYYY-MM-DD HH:MM", or "YYYY-MM-DD" for the last minute of that day."""
+    text = value.strip()
+    for pattern in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            moment = datetime.strptime(text, pattern)
+        except ValueError:
+            continue
+        return moment if pattern.endswith("%M") else moment.replace(hour=23, minute=59)
+    raise ValueError(f"--until takes YYYY-MM-DD or YYYY-MM-DD HH:MM, not {value!r}.")
+
+
 @app.command("mt5-demo-cycle")
 def mt5_demo_cycle(
     symbol: str = typer.Argument(
@@ -674,6 +686,12 @@ def mt5_demo_run(
         max=365,
         help="Stop the runner after this many days",
     ),
+    until: str | None = typer.Option(
+        None,
+        "--until",
+        help="Stop the runner at this local time (YYYY-MM-DD HH:MM) or at the end of this day "
+        "(YYYY-MM-DD); unlike --duration-days, a restarted runner keeps the same end",
+    ),
     risk_percent: float = typer.Option(
         0.25,
         "--risk-percent",
@@ -718,6 +736,11 @@ def mt5_demo_run(
     try:
         if side not in SIDES:
             raise ValueError(f"Side must be one of: {', '.join(SIDES)}.")
+        if duration_days is not None and until is not None:
+            raise ValueError("Pass --duration-days or --until, not both.")
+        end = _parse_until(until) if until is not None else None
+        if end is not None and end <= datetime.now():
+            raise ValueError(f"The end time {end:%Y-%m-%d %H:%M} has already passed.")
         selected_symbols = list(
             dict.fromkeys(item.strip() for item in symbols.split(",") if item.strip())
         )
@@ -749,6 +772,8 @@ def mt5_demo_run(
     schedule_description = "every hour" if every_hour else f"daily at {run_at}"
     if duration_days is not None:
         schedule_description += f" for {duration_days} days"
+    elif end is not None:
+        schedule_description += f" until {end:%Y-%m-%d %H:%M}"
     console.print(
         f"[bold]MT5 demo bot started[/bold] — {', '.join(selected_symbols)} · "
         f"{', '.join(selected_strategies)} · {timeframe.upper()} · {schedule_description}"
@@ -756,7 +781,7 @@ def mt5_demo_run(
     )
     console.print("[dim]No orders without --execute-demo; live accounts are always rejected.[/dim]")
     # Wall-clock times, so a computer that sleeps does not stretch the schedule.
-    deadline = datetime.now() + timedelta(days=duration_days) if duration_days is not None else None
+    deadline = datetime.now() + timedelta(days=duration_days) if duration_days is not None else end
 
     def run_round(cycles):
         """Run the cycles; return those that failed for a reason that may pass (RuntimeError)."""
