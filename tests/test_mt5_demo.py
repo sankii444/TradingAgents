@@ -214,6 +214,35 @@ def test_market_data_normalizes_broker_server_time_to_utc(tmp_path):
     assert mt5.sent_requests == []
 
 
+def _copy_rates_from_pos(rates):
+    """copy_rates_from_pos as MT5 serves it: position 0 is the newest bar, ``start`` skips some."""
+
+    def copy_rates_from_pos(_symbol, _timeframe, start, count):
+        end = len(rates) - start
+        return rates[max(0, end - count) : end]
+
+    return copy_rates_from_pos
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("next_bar_started", [False, True])
+def test_market_data_takes_the_bar_that_just_closed_even_before_the_next_tick(next_bar_started):
+    mt5 = FakeMT5()
+    closed = mt5.rates  # the newest of these bars closed at the top of the current hour
+    rates = closed
+    if next_bar_started:  # a tick has opened the current hour's bar, which is still forming
+        forming = closed[-1:].copy()
+        forming["time"] += 3600
+        rates = np.concatenate([closed, forming])
+    mt5.copy_rates_from_pos = _copy_rates_from_pos(rates)
+
+    with MT5DemoSession(mt5_module=mt5) as session:
+        market = session.market_data("XAUUSD")
+
+    assert market.bar_time == int(closed["time"][-1])
+    assert len(market.bars) == len(closed)
+
+
 @pytest.mark.unit
 def test_market_data_rejects_stale_quote_after_timezone_normalization():
     mt5 = FakeMT5(server_time_offset_seconds=3 * 60 * 60, quote_age_seconds=180)
@@ -427,10 +456,11 @@ def test_daily_entry_limit_applies_after_a_filled_cycle(tmp_path):
     mt5 = FakeMT5()
     state = tmp_path / "mt5.sqlite3"
     with MT5DemoSession(mt5_module=mt5) as session:
+        mt5.rates["time"] -= 3600  # the first cycle runs an hour earlier, on the bar before
         first_market = session.market_data("XAUUSD")
         first = session.evaluate_signal(first_market, "Buy", execute=True, state_path=state)
 
-        mt5.rates["time"] += 3600
+        mt5.rates["time"] += 3600  # a bar whose close time is still ahead would be forming
         second_market = session.market_data("XAUUSD")
         second = session.evaluate_signal(second_market, "Buy", execute=True, state_path=state)
 

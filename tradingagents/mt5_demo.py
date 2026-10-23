@@ -273,21 +273,26 @@ class MT5DemoSession:
         now = datetime.now(UTC).timestamp()
         server_utc_offset = _server_utc_offset_seconds(int(tick.time), now)
 
-        timeframe_constant = getattr(self.mt5, TIMEFRAMES[timeframe][0])
-        rates = self.mt5.copy_rates_from_pos(symbol, timeframe_constant, 1, bars_count)
-        if rates is None or len(rates) < 50:
+        timeframe_constant, period = TIMEFRAMES[timeframe]
+        rates = self.mt5.copy_rates_from_pos(
+            symbol, getattr(self.mt5, timeframe_constant), 0, bars_count + 1
+        )
+        bars = pd.DataFrame(rates if rates is not None else {"time": []})
+        bars["time"] = bars["time"] - server_utc_offset
+        # Position 0 is usually the bar still forming, but between a bar's close time and the
+        # next tick it is the bar that just closed: keep every bar whose close time has passed.
+        bars = bars[bars["time"] + period <= now].tail(bars_count).reset_index(drop=True)
+        if len(bars) < 50:
             raise RuntimeError(
                 f"MT5 returned fewer than 50 closed {timeframe} bars for {symbol}: "
                 f"{self.mt5.last_error()}."
             )
-        bars = pd.DataFrame(rates)
-        bars["time"] = bars["time"] - server_utc_offset
         bars["Date"] = pd.to_datetime(bars["time"], unit="s", utc=True)
         bars = bars.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"})
         snapshot = snapshot_from_frame(symbol, bars)
         bar_time = int(bars.iloc[-1]["time"])
         age = datetime.now(UTC).timestamp() - bar_time
-        if age < 0 or age > TIMEFRAMES[timeframe][1] * 3:
+        if age < 0 or age > period * 3:
             raise RuntimeError(
                 f"The last closed {timeframe} bar for {symbol} is stale; refusing to trade."
             )
