@@ -1110,7 +1110,7 @@ def dashboard(
     require_server: str = typer.Option(
         None,
         "--require-server",
-        help="Only send demo orders when the MT5 server name contains this text, e.g. GoldCity",
+        help="Only send demo orders when the MT5 server name contains this text, e.g. AdmiralsGroup",
     ),
 ):
     """Open the local web dashboard for MT5 demo analysis."""

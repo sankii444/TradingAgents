@@ -440,7 +440,7 @@ the dashboard shows when it is off. To allow orders only on one broker's demo
 server, pin it:
 
 ```powershell
-tradingagents dashboard --require-server "Gold City"
+tradingagents dashboard --require-server AdmiralsGroup
 ```
 
 <p align="center">

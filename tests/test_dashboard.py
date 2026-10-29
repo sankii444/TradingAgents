@@ -132,13 +132,13 @@ def test_dashboard_server_pin_blocks_orders_on_other_demo_servers(monkeypatch, t
 
     with pytest.raises(ValueError, match="does not match the required server"):
         execute_reviewed_signal(
-            {"symbol": "GOLD"}, tmp_path / "test.sqlite3", required_server="Gold City"
+            {"symbol": "GOLD"}, tmp_path / "test.sqlite3", required_server="RoboForex"
         )
     assert not session.market_data_called
     assert session.evaluations == []
     assert _server_matches("AdmiralsGroup-Demo", None)
-    assert _server_matches("Gold City-Demo", "goldcity")
-    assert not _server_matches("AdmiralsGroup-Demo", "Gold City")
+    assert _server_matches("AdmiralsGroup-Demo", "Admirals Group")
+    assert not _server_matches("AdmiralsGroup-Demo", "RoboForex")
 
 
 @pytest.mark.unit
@@ -147,7 +147,7 @@ def test_dashboard_status_reports_order_readiness_and_market_watch_symbols(monke
     monkeypatch.setattr("tradingagents.mt5_demo.MT5DemoSession", lambda: session)
 
     status = read_dashboard_status(tmp_path / "missing.sqlite3")
-    pinned = read_dashboard_status(tmp_path / "missing.sqlite3", required_server="Gold City")
+    pinned = read_dashboard_status(tmp_path / "missing.sqlite3", required_server="RoboForex")
 
     assert status["demo"] is True
     assert status["server"] == "AdmiralsGroup-Demo"
@@ -156,7 +156,7 @@ def test_dashboard_status_reports_order_readiness_and_market_watch_symbols(monke
     assert status["symbols"] == ["EURUSD", "GOLD"]
     assert status["cycles"] == []
     assert pinned["server_allowed"] is False
-    assert pinned["required_server"] == "Gold City"
+    assert pinned["required_server"] == "RoboForex"
 
 
 @pytest.mark.unit
